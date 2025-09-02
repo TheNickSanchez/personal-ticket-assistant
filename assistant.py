@@ -352,14 +352,23 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
 
             return (priority_score + keyword_boost, -ticket.stale_days, -ticket.age_days)
         
-        sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-        top = sorted_tickets[0]
-        
+        p1_tickets = [t for t in tickets if t.priority.startswith("P1")]
+        if p1_tickets:
+            top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
+            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+        else:
+            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+            top = sorted_tickets[0]
+
         # Generate reasoning
         reasons = []
         norm_priority = (top.priority or "").strip().lower()
         if norm_priority in ['p0', 'p1', 'p1 - critical', 'critical', 'highest', 'high']:
             reasons.append(f"{top.priority.strip()} priority")
+        if top.priority.startswith("P1"):
+            reasons.append("P1 priority")
+        elif top.priority in ['Critical', 'High']:
+            reasons.append(f"{top.priority} priority")
         if top.stale_days > 30:
             reasons.append(f"stale for {top.stale_days} days")
         if 'failure' in top.summary.lower():
