@@ -206,8 +206,32 @@ class LLMClient:
         elif self.provider == 'ollama':
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
-    
+
+        # Cache for the last workload analysis
+        self._analysis_cache: Optional[WorkloadAnalysis] = None
+        self._cache_time: Optional[datetime] = None
+
+    def clear_cache(self):
+        """Clear the stored analysis cache."""
+        self._analysis_cache = None
+        self._cache_time = None
+
     def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
+        """Return cached workload analysis when valid."""
+
+        if (
+            self._analysis_cache
+            and self._cache_time
+            and datetime.now() - self._cache_time < timedelta(hours=24)
+        ):
+            return self._analysis_cache
+
+        analysis = self._compute_analysis(tickets)
+        self._analysis_cache = analysis
+        self._cache_time = datetime.now()
+        return analysis
+
+    def _compute_analysis(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
         
         # Prepare ticket data for analysis
@@ -352,13 +376,8 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
 
             return (priority_score + keyword_boost, -ticket.stale_days, -ticket.age_days)
         
-        p1_tickets = [t for t in tickets if t.priority.startswith("P1")]
-        if p1_tickets:
-            top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
-            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-        else:
-            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-            top = sorted_tickets[0]
+        sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+        top = sorted_tickets[0]
 
         # Generate reasoning
         reasons = []
@@ -456,9 +475,9 @@ Keep response conversational and focused on getting this done."""
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(self):
-        self.jira = JiraClient()
-        self.llm = LLMClient()
+    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None):
+        self.jira = jira_client or JiraClient()
+        self.llm = llm_client or LLMClient()
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
         self.current_focus: Optional[Ticket] = None
@@ -588,6 +607,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if input_lower.startswith('comment '):
             ticket_key = user_input[8:].strip()
             self._help_with_comment(ticket_key)
+            return False
+
+        if input_lower in ['re analyze', 'reanalyze', 're-analyze']:
+            console.print("🔁 Re-analyzing your workload...")
+            self.llm.clear_cache()
+            with console.status("[bold green]Analyzing priorities..."):
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+            self._display_analysis()
             return False
         
         # Context-aware responses
