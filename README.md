@@ -1,5 +1,3 @@
-# README.md
-
 # 🎯 Personal AI Ticket Assistant
 
 Your intelligent work companion that pulls Jira tickets and helps you prioritize, understand, and tackle your daily work through conversational AI.
