@@ -5,6 +5,7 @@ import os
 import json
 import requests
 import re
+import hashlib
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
@@ -378,6 +379,8 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
 
             return (priority_score + keyword_boost, -ticket.stale_days, -ticket.age_days)
         
+        sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+        top = sorted_tickets[0]
         p0_tickets = [t for t in tickets if (t.priority or "").strip().upper().startswith("P0")]
         if p0_tickets:
             sorted_tickets = sorted(tickets, key=ticket_urgency_score)
@@ -507,7 +510,14 @@ class WorkAssistant:
         self.current_analysis: Optional[WorkloadAnalysis] = None
         self.current_focus: Optional[Ticket] = None
         self.last_user_input: str = ""
-    
+        self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
+        self.current_ticket_hash: Optional[str] = None
+
+    def _calculate_ticket_hash(self, tickets: List[Ticket]) -> str:
+        """Create a hash representing the current ticket set"""
+        hash_input = "|".join(sorted(f"{t.key}:{t.updated.isoformat()}" for t in tickets))
+        return hashlib.sha256(hash_input.encode()).hexdigest()
+
     def start_session(self):
         """Begin a work session"""
         console.print("\n🎯 Personal AI Work Assistant", style="bold blue")
@@ -516,21 +526,29 @@ class WorkAssistant:
         # Fetch tickets
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
-        
+
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
-        
-        # Get AI analysis
-        with console.status("[bold green]Analyzing priorities..."):
-            self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+
+        # Determine ticket hash for caching
+        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
+
+        # Get AI analysis (use cache when available)
+        cached = self.analysis_cache.get(self.current_ticket_hash)
+        if cached:
+            self.current_analysis = cached
+        else:
+            with console.status("[bold green]Analyzing priorities..."):
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+            self.analysis_cache[self.current_ticket_hash] = self.current_analysis
         
         # Display the analysis
         self._display_analysis()
         
         # Start interactive session
         self._interactive_session()
-    
+
     def _display_analysis(self):
         """Display the AI workload analysis"""
         if not self.current_analysis:
@@ -577,11 +595,30 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 title_align="left",
                 border_style="green"
             ))
-    
+
+    def _refresh_analysis(self):
+        """Clear cached analysis and recompute"""
+        if self.current_ticket_hash and self.current_ticket_hash in self.analysis_cache:
+            del self.analysis_cache[self.current_ticket_hash]
+
+        console.print("\n🔄 Refreshing workload analysis...")
+
+        with console.status("[bold green]Fetching your tickets..."):
+            self.current_tickets = self.jira.get_my_tickets()
+
+        with console.status("[bold green]Analyzing priorities..."):
+            self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+
+        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
+        self.analysis_cache[self.current_ticket_hash] = self.current_analysis
+
+        self._display_analysis()
+
     def _interactive_session(self):
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
+        console.print("Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'refresh', 'quit'")
         console.print("Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'open <ticket>', 'health', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
@@ -639,7 +676,12 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if input_lower == 'list' or input_lower == '2':
             self._list_tickets()
             return False
-        
+
+        # Refresh analysis
+        if input_lower in ['refresh', 're analyze', 're-analyze', 'reanalyze']:
+            self._refresh_analysis()
+            return False
+
         # Smart command parsing
         if input_lower.startswith('focus '):
             ticket_key = user_input[6:].strip()
@@ -967,9 +1009,10 @@ Focus on progress, next steps, or findings based on the context provided."""
 
 Basic Commands:
 • list - Show all your tickets in a table
-• focus <ticket-key> - Get detailed analysis of a specific ticket  
+• focus <ticket-key> - Get detailed analysis of a specific ticket
 • help <ticket-key> - Get AI assistance and action suggestions
 • comment <ticket-key> - Draft and post a comment with AI help
+• refresh - Re-run workload analysis
 • open <ticket-key> - Print the Jira URL to open in browser
 • health - Run environment and connectivity checks
 • quit - End the session
