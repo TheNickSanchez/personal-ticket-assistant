@@ -103,7 +103,7 @@ Let me analyze your current workload...
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 💬 Let's work together! What would you like to do?
-Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'quit'
+Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'refresh', 'quit'
 
 What should we tackle? help SEC-2847
 
@@ -123,6 +123,7 @@ I can help you with SEC-2847 in these ways:
 - `focus <ticket>` - Get detailed analysis of a specific ticket
 - `help <ticket>` - Get AI suggestions and offers to help with actions
 - `comment <ticket>` - Draft and post a comment with AI assistance
+- `refresh` - Re-run workload analysis
 - `quit` - End your work session
 
 ## Configuration Details

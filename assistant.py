@@ -17,6 +17,7 @@ from rich.prompt import Prompt, Confirm
 import openai
 from dotenv import load_dotenv
 from semantic_cache import SemanticCache
+from cache import Cache
 
 # Load environment variables
 load_dotenv()
@@ -201,6 +202,7 @@ class JiraClient:
 class LLMClient:
     def __init__(self):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
+        self.cache = Cache()
         
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -211,7 +213,31 @@ class LLMClient:
 
         self.cache = SemanticCache()
     
+        # Cache for the last workload analysis
+        self._analysis_cache: Optional[WorkloadAnalysis] = None
+        self._cache_time: Optional[datetime] = None
+
+    def clear_cache(self):
+        """Clear the stored analysis cache."""
+        self._analysis_cache = None
+        self._cache_time = None
+
     def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
+        """Return cached workload analysis when valid."""
+
+        if (
+            self._analysis_cache
+            and self._cache_time
+            and datetime.now() - self._cache_time < timedelta(hours=24)
+        ):
+            return self._analysis_cache
+
+        analysis = self._compute_analysis(tickets)
+        self._analysis_cache = analysis
+        self._cache_time = datetime.now()
+        return analysis
+
+    def _compute_analysis(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
         
         # Prepare ticket data for analysis
@@ -375,10 +401,24 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
             sorted_tickets = sorted(tickets, key=ticket_urgency_score)
         elif p1_tickets:
             top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
+        sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+        top = sorted_tickets[0]
+        p0_tickets = [t for t in tickets if (t.priority or "").strip().upper().startswith("P0")]
+        if p0_tickets:
+
             sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+            top = sorted(p0_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
         else:
-            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-            top = sorted_tickets[0]
+            p1_tickets = [t for t in tickets if (t.priority or "").strip().upper().startswith("P1")]
+            if p1_tickets:
+                sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+                top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
+            else:
+                sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+                top = sorted_tickets[0]
+        sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+        top = sorted_tickets[0]
+
 
         # Generate reasoning
         reasons = []
@@ -407,12 +447,20 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
             summary=f"You have {len(tickets)} tickets. Focus on {top.key} first - {reasoning}."
         )
     
-    def suggest_action(self, ticket: Ticket, context: str = "") -> str:
+    def suggest_action(self, ticket: Ticket, context: str = "", force_refresh: bool = False) -> str:
         """Get AI suggestion for specific ticket action"""
+        cache_key = f"{ticket.key}:{context.strip()}"
+        if not force_refresh:
+            cached = self.cache.get(cache_key)
+            if cached:
+                ts = datetime.fromisoformat(cached.get("timestamp"))
+                if datetime.now() - ts < timedelta(hours=24):
+                    return cached.get("suggestion", "")
+
         prompt = f"""I need help with this Jira ticket:
 
 Ticket: {ticket.key} - {ticket.summary}
-Priority: {ticket.priority} | Status: {ticket.status}  
+Priority: {ticket.priority} | Status: {ticket.status}
 Age: {ticket.age_days} days | Stale: {ticket.stale_days} days
 Comments: {ticket.comments_count} | Type: {ticket.issue_type}
 Labels: {ticket.labels}
@@ -421,7 +469,7 @@ Description: {ticket.description}
 
 Context: {context}
 
-As my work assistant, suggest the most logical next step to move this ticket forward. 
+As my work assistant, suggest the most logical next step to move this ticket forward.
 Be specific and actionable. If there are files to download, configs to check, or people to contact, mention them.
 Offer concrete help with execution.
 
@@ -434,18 +482,20 @@ Keep response conversational and focused on getting this done."""
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.7
                 )
-                return response.choices[0].message.content
-            else:  # ollama  
+                suggestion = response.choices[0].message.content
+            else:  # ollama
                 response = requests.post(f"{self.ollama_host}/api/generate", json={
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False
                 })
-                return response.json()["response"]
-                
-        except Exception as e:
-            # Provide intelligent fallback based on ticket content
-            return self._generate_fallback_suggestion(ticket)
+                suggestion = response.json()["response"]
+
+        except Exception:
+            suggestion = self._generate_fallback_suggestion(ticket)
+
+        self.cache.set(cache_key, {"timestamp": datetime.now().isoformat(), "suggestion": suggestion})
+        return suggestion
     
     def _generate_fallback_suggestion(self, ticket: Ticket) -> str:
         """Generate a helpful suggestion when AI is unavailable"""
@@ -476,14 +526,21 @@ Keep response conversational and focused on getting this done."""
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(self):
-        self.jira = JiraClient()
-        self.llm = LLMClient()
+    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None):
+        self.jira = jira_client or JiraClient()
+        self.llm = llm_client or LLMClient()
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
         self.current_focus: Optional[Ticket] = None
         self.last_user_input: str = ""
-    
+        self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
+        self.current_ticket_hash: Optional[str] = None
+
+    def _calculate_ticket_hash(self, tickets: List[Ticket]) -> str:
+        """Create a hash representing the current ticket set"""
+        hash_input = "|".join(sorted(f"{t.key}:{t.updated.isoformat()}" for t in tickets))
+        return hashlib.sha256(hash_input.encode()).hexdigest()
+
     def start_session(self):
         """Begin a work session"""
         console.print("\n🎯 Personal AI Work Assistant", style="bold blue")
@@ -492,21 +549,29 @@ class WorkAssistant:
         # Fetch tickets
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
-        
+
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
-        
-        # Get AI analysis
-        with console.status("[bold green]Analyzing priorities..."):
-            self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+
+        # Determine ticket hash for caching
+        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
+
+        # Get AI analysis (use cache when available)
+        cached = self.analysis_cache.get(self.current_ticket_hash)
+        if cached:
+            self.current_analysis = cached
+        else:
+            with console.status("[bold green]Analyzing priorities..."):
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+            self.analysis_cache[self.current_ticket_hash] = self.current_analysis
         
         # Display the analysis
         self._display_analysis()
         
         # Start interactive session
         self._interactive_session()
-    
+
     def _display_analysis(self):
         """Display the AI workload analysis"""
         if not self.current_analysis:
@@ -553,17 +618,48 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 title_align="left",
                 border_style="green"
             ))
-    
+
+    def _refresh_analysis(self):
+        """Clear cached analysis and recompute"""
+        if self.current_ticket_hash and self.current_ticket_hash in self.analysis_cache:
+            del self.analysis_cache[self.current_ticket_hash]
+
+        console.print("\n🔄 Refreshing workload analysis...")
+
+        with console.status("[bold green]Fetching your tickets..."):
+            self.current_tickets = self.jira.get_my_tickets()
+
+        with console.status("[bold green]Analyzing priorities..."):
+            self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+
+        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
+        self.analysis_cache[self.current_ticket_hash] = self.current_analysis
+
+        self._display_analysis()
+
     def _interactive_session(self):
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'quit'")
+        console.print("Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'refresh', 'quit'")
+        console.print("Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'open <ticket>', 'health', 'quit'")
+        console.print("\nQuick picks:")
+        top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
+        if top_key:
+            console.print(f"  1) Focus top priority ({top_key})  [default]")
+            console.print("  2) List tickets")
+            console.print(f"  3) Help with top priority ({top_key})")
+            console.print("  4) Choose a ticket by key")
+            console.print("  5) Quit")
+        else:
+            console.print("  2) List tickets  [default]")
+            console.print("  4) Choose a ticket by key")
+            console.print("  5) Quit")
         console.print("="*60 + "\n")
         
         while True:
             try:
-                user_input = Prompt.ask("\n[bold blue]What should we tackle?[/bold blue]").strip()
+                user_input = Prompt.ask("\n[bold blue]What should we tackle?[/bold blue] (press Enter for default)").strip()
                 self.last_user_input = user_input.lower()
                 
                 if self._handle_user_input(user_input):
@@ -579,6 +675,16 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle various user inputs with improved parsing"""
         input_lower = user_input.lower().strip()
         
+        # Empty input = default action
+        if input_lower == "":
+            if self.current_analysis and self.current_analysis.top_priority:
+                console.print(f"👍 Focusing on top priority: {self.current_analysis.top_priority.key}")
+                self._focus_on_ticket(self.current_analysis.top_priority.key)
+                return False
+            else:
+                self._list_tickets()
+                return False
+        
         # Quit commands
         if input_lower in ['quit', 'exit', 'q', 'bye']:
             console.print("👋 Great work session! See you later.", style="green")
@@ -590,24 +696,67 @@ Why it's urgent: {analysis.priority_reasoning}"""
             return False
         
         # List command
-        if input_lower == 'list':
+        if input_lower == 'list' or input_lower == '2':
             self._list_tickets()
             return False
-        
+
+        # Refresh analysis
+        if input_lower in ['refresh', 're analyze', 're-analyze', 'reanalyze']:
+            self._refresh_analysis()
+            return False
+
         # Smart command parsing
         if input_lower.startswith('focus '):
             ticket_key = user_input[6:].strip()
             self._focus_on_ticket(ticket_key)
+            return False
+        # Numeric shortcut: 1 = focus top
+        if input_lower == '1':
+            if self.current_analysis and self.current_analysis.top_priority:
+                self._focus_on_ticket(self.current_analysis.top_priority.key)
+            else:
+                console.print("No top priority ticket available.", style="yellow")
             return False
         
         if input_lower.startswith('help '):
             ticket_key = user_input[5:].strip()
             self._get_ticket_help(ticket_key)
             return False
+        # Numeric shortcut: 3 = help top
+        if input_lower == '3':
+            if self.current_analysis and self.current_analysis.top_priority:
+                self._get_ticket_help(self.current_analysis.top_priority.key)
+            else:
+                console.print("No top priority ticket available.", style="yellow")
+            return False
         
         if input_lower.startswith('comment '):
             ticket_key = user_input[8:].strip()
             self._help_with_comment(ticket_key)
+            return False
+
+        if input_lower in ['re analyze', 'reanalyze', 're-analyze']:
+            console.print("🔁 Re-analyzing your workload...")
+            self.llm.clear_cache()
+            with console.status("[bold green]Analyzing priorities..."):
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+            self._display_analysis()
+        # Numeric shortcut: 4 = choose a ticket by key (prompt)
+        if input_lower == '4':
+            key = Prompt.ask("Enter ticket key (e.g., CPE-3117)").strip()
+            if key:
+                self._focus_on_ticket(key)
+            return False
+
+        # Open ticket in browser (prints URL)
+        if input_lower.startswith('open '):
+            ticket_key = user_input[5:].strip()
+            self._open_ticket(ticket_key)
+            return False
+
+        # Health check
+        if input_lower == 'health':
+            self._health_check()
             return False
         
         # Context-aware responses
@@ -635,12 +784,61 @@ Why it's urgent: {analysis.priority_reasoning}"""
         # Default response with suggestions
         if self.current_analysis and self.current_analysis.top_priority:
             top_ticket = self.current_analysis.top_priority.key
-            console.print(f"💡 Try: 'focus {top_ticket}' or 'help {top_ticket}' to work on your top priority")
-            console.print("Or say 'list' to see all your tickets")
+            console.print(f"💡 Try: Enter, '1', or 'focus {top_ticket}' to work on your top priority")
+            console.print("Or '2'/'list' to see all your tickets, 'health' for diagnostics")
         else:
-            console.print("💡 Try: 'list' to see your tickets, or 'help' for available commands")
-        
+            console.print("💡 Try: '2'/'list' to see your tickets, or 'help' for available commands")
+
         return False
+
+    def _open_ticket(self, ticket_key: str):
+        """Print the Jira URL for a ticket, to open manually"""
+        if not ticket_key:
+            console.print("❌ Please provide a ticket key (e.g., 'open CPE-3117')", style="red")
+            return
+        base = os.getenv('JIRA_BASE_URL', '').rstrip('/')
+        if not base:
+            console.print("❌ Missing JIRA_BASE_URL in environment.", style="red")
+            return
+        url = f"{base}/browse/{ticket_key.upper()}"
+        console.print(f"🔗 {url}")
+
+    def _health_check(self):
+        """Run a quick environment and connectivity check"""
+        console.print("\n🩺 Running health check...")
+        # Env vars
+        required_vars = ['JIRA_BASE_URL', 'JIRA_EMAIL', 'JIRA_API_TOKEN']
+        missing = [v for v in required_vars if not os.getenv(v)]
+        if missing:
+            console.print("❌ Missing environment variables:", style="red")
+            for v in missing:
+                console.print(f"  • {v}")
+        else:
+            console.print("✅ Jira environment variables present")
+
+        # LLM provider
+        provider = os.getenv('LLM_PROVIDER', 'openai')
+        if provider == 'openai':
+            if os.getenv('OPENAI_API_KEY'):
+                console.print("✅ OpenAI configured")
+            else:
+                console.print("⚠️ OpenAI not configured (set OPENAI_API_KEY)", style="yellow")
+        elif provider == 'ollama':
+            console.print("✅ Using Ollama (ensure 'ollama serve' is running)")
+        else:
+            console.print(f"⚠️ Unknown LLM provider: {provider}", style="yellow")
+
+        # Basic Jira connectivity test (non-fatal)
+        try:
+            url = f"{os.getenv('JIRA_BASE_URL').rstrip('/')}/rest/api/3/myself"
+            auth = (os.getenv('JIRA_EMAIL'), os.getenv('JIRA_API_TOKEN'))
+            resp = requests.get(url, auth=auth, timeout=5)
+            if resp.status_code == 200:
+                console.print("✅ Jira API reachable")
+            else:
+                console.print(f"⚠️ Jira API responded with status {resp.status_code}", style="yellow")
+        except Exception as e:
+            console.print(f"⚠️ Jira connectivity check failed: {e}", style="yellow")
     
     def _handle_contextual_input(self, input_lower: str) -> bool:
         """Handle input when we have a current focus ticket"""
@@ -834,9 +1032,12 @@ Focus on progress, next steps, or findings based on the context provided."""
 
 Basic Commands:
 • list - Show all your tickets in a table
-• focus <ticket-key> - Get detailed analysis of a specific ticket  
+• focus <ticket-key> - Get detailed analysis of a specific ticket
 • help <ticket-key> - Get AI assistance and action suggestions
 • comment <ticket-key> - Draft and post a comment with AI help
+• refresh - Re-run workload analysis
+• open <ticket-key> - Print the Jira URL to open in browser
+• health - Run environment and connectivity checks
 • quit - End the session
 
 Smart Commands:
@@ -855,6 +1056,8 @@ Examples:
 • focus CPE-3313
 • help CPE-3117
 • comment CPE-2925
+• open CPE-3117
+• health
 • research (when focused on a ticket)
 
 The assistant understands natural language, so you can also:
