@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*.egg
+*.egg-info/
+dist/
+build/
+*.so
+*.log
+*.sqlite3
+*.db
+*.dat
+*.bak
+*.tmp
+*.swp
+*.swo
+*.env
+.env*
+# VS Code
+.vscode/
+# Jupyter
+.ipynb_checkpoints/
+# MacOS
+.DS_Store
+# Environment
+.env
+.env.*
+# Other
+*.secret
+*.key
+*.pem
+*.crt
+*.cache
+*.coverage
+*.tox/
+*.mypy_cache/
+*.pytest_cache/
+# Node
+node_modules/
