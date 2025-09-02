@@ -5,6 +5,7 @@ import os
 import json
 import requests
 import re
+import hashlib
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 import openai
 from dotenv import load_dotenv
+from semantic_cache import SemanticCache
 
 # Load environment variables
 load_dotenv()
@@ -206,6 +208,8 @@ class LLMClient:
         elif self.provider == 'ollama':
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
+
+        self.cache = SemanticCache()
     
     def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
@@ -226,6 +230,18 @@ class LLMClient:
                 'description': ticket.description[:300] if ticket.description else "No description"
             })
         
+        sorted_tickets = sorted(ticket_summaries, key=lambda t: t['key'])
+        ticket_hash_source = json.dumps(sorted_tickets, sort_keys=True, default=str)
+        ticket_hash = hashlib.sha256(ticket_hash_source.encode('utf-8')).hexdigest()
+
+        cached = self.cache.get(ticket_hash)
+        if cached:
+            ts = datetime.fromisoformat(cached["timestamp"])
+            if datetime.now() - ts < timedelta(hours=24):
+                analysis_text = cached["analysis_text"]
+                recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
+                return self._parse_analysis(analysis_text, tickets, recommended_ticket)
+
         prompt = f"""You are my intelligent work assistant. I have {len(tickets)} open tickets that need attention.
 
 My tickets:
@@ -270,10 +286,10 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                     "stream": False
                 })
                 analysis_text = response.json()["response"]
-            
+            self.cache.set(ticket_hash, analysis_text)
             # Extract the recommended ticket key from AI response
             recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
-            
+
             return self._parse_analysis(analysis_text, tickets, recommended_ticket)
             
         except Exception as e:
@@ -352,8 +368,12 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
 
             return (priority_score + keyword_boost, -ticket.stale_days, -ticket.age_days)
         
-        p1_tickets = [t for t in tickets if t.priority.startswith("P1")]
-        if p1_tickets:
+        p0_tickets = [t for t in tickets if t.priority.strip().upper().startswith("P0")]
+        p1_tickets = [t for t in tickets if t.priority.strip().upper().startswith("P1")]
+        if p0_tickets:
+            top = sorted(p0_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
+            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+        elif p1_tickets:
             top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
             sorted_tickets = sorted(tickets, key=ticket_urgency_score)
         else:
