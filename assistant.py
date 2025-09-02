@@ -328,8 +328,20 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
         
         # Prioritize by: P1 > security/failure keywords > staleness > age
         def ticket_urgency_score(ticket: Ticket) -> tuple:
-            priority_score = {'P1': 0, 'High': 1, 'Critical': 0, 'P2': 2, 'Medium': 3, 'P3': 4, 'Low': 5}.get(ticket.priority, 6)
-            
+            priority = (ticket.priority or "").strip().lower()
+            priority_score = {
+                'p0': -1,
+                'p1': 0,
+                'p1 - critical': 0,
+                'critical': 0,
+                'highest': 0,
+                'high': 1,
+                'p2': 2,
+                'medium': 3,
+                'p3': 4,
+                'low': 5,
+            }.get(priority, 6)
+
             # Security/failure keywords boost
             keywords = ['security', 'failure', 'critical', 'blocked', 'urgent', 'voc_feedback']
             keyword_boost = 0
@@ -337,7 +349,7 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                 if keyword in ticket.summary.lower() or keyword in ticket.description.lower():
                     keyword_boost -= 2
                     break
-            
+
             return (priority_score + keyword_boost, -ticket.stale_days, -ticket.age_days)
         
         p1_tickets = [t for t in tickets if t.priority.startswith("P1")]
@@ -350,6 +362,9 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
 
         # Generate reasoning
         reasons = []
+        norm_priority = (top.priority or "").strip().lower()
+        if norm_priority in ['p0', 'p1', 'p1 - critical', 'critical', 'highest', 'high']:
+            reasons.append(f"{top.priority.strip()} priority")
         if top.priority.startswith("P1"):
             reasons.append("P1 priority")
         elif top.priority in ['Critical', 'High']:
