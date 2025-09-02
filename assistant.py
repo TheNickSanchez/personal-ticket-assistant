@@ -18,6 +18,7 @@ import openai
 from dotenv import load_dotenv
 from semantic_cache import SemanticCache
 from cache import Cache
+from session_manager import SessionManager
 
 # Load environment variables
 load_dotenv()
@@ -202,9 +203,11 @@ class JiraClient:
 class LLMClient:
     def __init__(self):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
+        # cache for suggestions
         self.cache = Cache()
         self.semantic_cache = SemanticCache()
         
+
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
             self.model = os.getenv('OPENAI_MODEL', 'gpt-4')
@@ -212,6 +215,9 @@ class LLMClient:
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
 
+        # cache for workload analysis
+        self.semantic_cache = SemanticCache()
+    
         # Cache for the last workload analysis
         self._analysis_cache: Optional[WorkloadAnalysis] = None
         self._cache_time: Optional[datetime] = None
@@ -545,6 +551,8 @@ class WorkAssistant:
     def save_state(self):
         """Persist current focus ticket"""
         self.session_cache.set("session", {"current_focus": self.current_focus.key if self.current_focus else None})
+        self.session_manager = SessionManager()
+        self.notes: List[str] = []
 
     def _calculate_ticket_hash(self, tickets: List[Ticket]) -> str:
         """Create a hash representing the current ticket set"""
@@ -711,6 +719,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         
         # Quit commands
         if input_lower in ['quit', 'exit', 'q', 'bye']:
+            if Confirm.ask("Save progress before exiting?"):
+                self.session_manager.save_progress(self.current_focus, self.notes)
+                console.print("💾 Progress saved.", style="green")
             console.print("👋 Great work session! See you later.", style="green")
             return True
         
