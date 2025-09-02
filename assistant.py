@@ -16,7 +16,6 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 import openai
 from dotenv import load_dotenv
-from semantic_cache import SemanticCache
 from cache import Cache
 from session_manager import SessionManager
 
@@ -205,6 +204,10 @@ class LLMClient:
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # Cache for per-ticket suggestions
         self.cache = Cache()
+        # cache for suggestions
+        self.cache = Cache()
+        self.semantic_cache = SemanticCache()
+        
 
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -215,6 +218,10 @@ class LLMClient:
 
         # Separate cache for workload analysis
         self.analysis_cache = SemanticCache()
+        self.analysis_cache = Cache("analysis_cache.json")
+
+        # cache for workload analysis
+        self.semantic_cache = SemanticCache()
     
         # Cache for the last workload analysis
         self._analysis_cache: Optional[WorkloadAnalysis] = None
@@ -224,6 +231,7 @@ class LLMClient:
         """Clear the stored analysis cache."""
         self._analysis_cache = None
         self._cache_time = None
+        self.analysis_cache.clear()
 
     def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Return cached workload analysis when valid."""
@@ -264,6 +272,7 @@ class LLMClient:
         ticket_hash = hashlib.sha256(ticket_hash_source.encode('utf-8')).hexdigest()
 
         cached = self.analysis_cache.get(ticket_hash)
+        cached = self.semantic_cache.get(ticket_hash)
         if cached:
             ts = datetime.fromisoformat(cached["timestamp"])
             if datetime.now() - ts < timedelta(hours=24):
@@ -316,6 +325,11 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                 })
                 analysis_text = response.json()["response"]
             self.analysis_cache.set(ticket_hash, analysis_text)
+            self.analysis_cache.set(ticket_hash, {
+                "analysis_text": analysis_text,
+                "timestamp": datetime.now().isoformat(),
+            })
+            self.semantic_cache.set(ticket_hash, analysis_text)
             # Extract the recommended ticket key from AI response
             recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
 
@@ -535,6 +549,8 @@ class WorkAssistant:
         llm_client: Optional[LLMClient] = None,
         session_manager: Optional[SessionManager] = None,
     ):
+    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None):
+        self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
         self.llm = llm_client or LLMClient()
         self.session = session_manager or SessionManager()
@@ -544,13 +560,43 @@ class WorkAssistant:
         self.last_user_input: str = ""
         self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
         self.current_ticket_hash: Optional[str] = None
+        self.session_cache = Cache()
+        self.saved_focus_key: Optional[str] = None
+
+    def load_state(self):
+        """Load persisted session state"""
+        data = self.session_cache.get("session") or {}
+        self.saved_focus_key = data.get("current_focus")
+
+    def save_state(self):
+        """Persist current focus ticket"""
+        self.session_cache.set("session", {"current_focus": self.current_focus.key if self.current_focus else None})
+        self.session_manager = SessionManager()
+        self.notes: List[str] = []
 
     def _calculate_ticket_hash(self, tickets: List[Ticket]) -> str:
         """Create a hash representing the current ticket set"""
         hash_input = "|".join(sorted(f"{t.key}:{t.updated.isoformat()}" for t in tickets))
         return hashlib.sha256(hash_input.encode()).hexdigest()
 
+    def _ticket_from_dict(self, data: Dict[str, Any]) -> Ticket:
+        return Ticket(
+            key=data['key'],
+            summary=data['summary'],
+            description=data['description'],
+            priority=data['priority'],
+            status=data['status'],
+            assignee=data.get('assignee'),
+            created=datetime.fromisoformat(data['created']),
+            updated=datetime.fromisoformat(data['updated']),
+            comments_count=data.get('comments_count', 0),
+            labels=data.get('labels', []),
+            issue_type=data.get('issue_type', ''),
+            raw_data=data.get('raw_data', {}),
+        )
+
     def start_session(self):
+    def start_session(self, resume: bool = False):
         """Begin a work session"""
         console.print("\n🎯 Personal AI Work Assistant", style="bold blue")
         console.print("Let me analyze your current workload...\n")
@@ -570,6 +616,22 @@ class WorkAssistant:
         # Fetch tickets
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
+        use_cache = False
+        if self.session.last_scan:
+            if self.session.needs_rescan():
+                if not Confirm.ask("Last scan was over 24h ago. Scan again?"):
+                    self.current_tickets = [self._ticket_from_dict(t) for t in self.session.get_tickets()]
+                    use_cache = True
+            else:
+                summary = self.session.get_ticket_summary()
+                if Confirm.ask(f"{summary}\nResume last session?"):
+                    self.current_tickets = [self._ticket_from_dict(t) for t in self.session.get_tickets()]
+                    use_cache = True
+
+        if not use_cache:
+            with console.status("[bold green]Fetching your tickets..."):
+                self.current_tickets = self.jira.get_my_tickets()
+            self.session.update_session(self.current_tickets)
 
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
@@ -581,7 +643,6 @@ class WorkAssistant:
         # Determine ticket hash for caching
         self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
 
-        # Get AI analysis (use cache when available)
         cached = self.analysis_cache.get(self.current_ticket_hash)
         if cached:
             self.current_analysis = cached
@@ -596,9 +657,22 @@ class WorkAssistant:
         # If resuming, automatically focus on last ticket
         if resume and self.session.get_current_focus():
             self._focus_on_ticket(self.session.get_current_focus())
+        self._display_analysis()
+
+        if resume and self.saved_focus_key:
+            self._focus_on_ticket(self.saved_focus_key)
 
         # Start interactive session
         self._interactive_session()
+
+    def fresh_scan(self):
+        """Force ticket retrieval and fresh analysis"""
+        self.llm.clear_cache()
+        self.analysis_cache = {}
+        self.current_focus = None
+        self.saved_focus_key = None
+        self.save_state()
+        self.start_session()
 
     def _display_analysis(self):
         """Display the AI workload analysis"""
@@ -652,10 +726,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if self.current_ticket_hash and self.current_ticket_hash in self.analysis_cache:
             del self.analysis_cache[self.current_ticket_hash]
 
+        self.llm.clear_cache()
+
         console.print("\n🔄 Refreshing workload analysis...")
+        self.llm.clear_cache()
 
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
+        self.session.update_session(self.current_tickets)
 
         with console.status("[bold green]Analyzing priorities..."):
             self.current_analysis = self.llm.analyze_workload(self.current_tickets)
@@ -717,6 +795,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         
         # Quit commands
         if input_lower in ['quit', 'exit', 'q', 'bye']:
+            if Confirm.ask("Save progress before exiting?"):
+                self.session_manager.save_progress(self.current_focus, self.notes)
+                console.print("💾 Progress saved.", style="green")
             console.print("👋 Great work session! See you later.", style="green")
             return True
         
@@ -732,6 +813,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
 
         # Refresh analysis
         if input_lower in ['refresh']:
+        if input_lower == 'refresh':
             self._refresh_analysis()
             return False
 
@@ -909,6 +991,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
 
         self.current_focus = ticket
         self.session.set_current_focus(ticket.key)
+        self.save_state()
         console.print(f"\n🔍 Focusing on {ticket.key}...")
         
         # Show ticket details with proper description formatting
@@ -940,8 +1023,9 @@ Description:
         if not ticket:
             console.print(f"❌ Couldn't find ticket '{ticket_key}'", style="red")
             return
-        
+
         self.current_focus = ticket
+        self.save_state()
         console.print(f"\n🆘 Getting help for {ticket.key}...")
         
         with console.status("[bold green]Analyzing ticket and generating help..."):
@@ -1128,10 +1212,21 @@ def main():
         console.print("The assistant will still work with basic analysis.", style="yellow")
     elif llm_provider == 'ollama':
         console.print("🤖 Using Ollama for AI features. Make sure it's running locally.", style="blue")
-    
+
     try:
         assistant = WorkAssistant()
-        assistant.start_session()
+        assistant.load_state()
+        if assistant.saved_focus_key:
+            choice = Prompt.ask(
+                f"Resume work on {assistant.saved_focus_key} or scan for new tickets?",
+                choices=["resume", "scan"],
+            )
+            if choice == "resume":
+                assistant.start_session(resume=True)
+            else:
+                assistant.fresh_scan()
+        else:
+            assistant.fresh_scan()
     except KeyboardInterrupt:
         console.print("\n👋 Session interrupted. See you later!", style="yellow")
     except Exception as e:
