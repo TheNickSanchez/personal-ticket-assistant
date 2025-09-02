@@ -27,3 +27,8 @@ class Cache:
     def set(self, key: str, value: Dict[str, Any]) -> None:
         self._cache[key] = value
         self._save()
+
+    def clear(self) -> None:
+        """Remove all items from the cache."""
+        self._cache = {}
+        self._save()
