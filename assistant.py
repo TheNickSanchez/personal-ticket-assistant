@@ -16,7 +16,7 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 import openai
 from dotenv import load_dotenv
-from cache import Cache
+from cache import Cache, SemanticCache
 from session_manager import SessionManager
 
 # Load environment variables
@@ -204,8 +204,6 @@ class LLMClient:
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # Cache for per-ticket suggestions
         self.cache = Cache()
-        # cache for suggestions
-        self.cache = Cache()
         self.semantic_cache = SemanticCache()
         
 
@@ -216,12 +214,8 @@ class LLMClient:
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
 
-        # Separate cache for workload analysis
-        self.analysis_cache = SemanticCache()
+        # Separate cache for workload analysis (file-backed)
         self.analysis_cache = Cache("analysis_cache.json")
-
-        # cache for workload analysis
-        self.semantic_cache = SemanticCache()
     
         # Cache for the last workload analysis
         self._analysis_cache: Optional[WorkloadAnalysis] = None
@@ -271,8 +265,15 @@ class LLMClient:
         ticket_hash_source = json.dumps(sorted_tickets, sort_keys=True, default=str)
         ticket_hash = hashlib.sha256(ticket_hash_source.encode('utf-8')).hexdigest()
 
-        cached = self.analysis_cache.get(ticket_hash)
-        cached = self.semantic_cache.get(ticket_hash)
+        # Try both caches: file key and semantic (by content)
+        cached = None
+        if hasattr(self.analysis_cache, 'get'):
+            try:
+                cached = self.analysis_cache.get(ticket_hash)
+            except Exception:
+                cached = None
+        if not cached and hasattr(self.semantic_cache, 'get_by_content'):
+            cached = self.semantic_cache.get_by_content(ticket_hash)
         if cached:
             ts = datetime.fromisoformat(cached["timestamp"])
             if datetime.now() - ts < timedelta(hours=24):
@@ -324,12 +325,18 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                     "stream": False
                 })
                 analysis_text = response.json()["response"]
-            self.analysis_cache.set(ticket_hash, analysis_text)
-            self.analysis_cache.set(ticket_hash, {
-                "analysis_text": analysis_text,
-                "timestamp": datetime.now().isoformat(),
-            })
-            self.semantic_cache.set(ticket_hash, analysis_text)
+            # cache minimal analysis in file-backed cache
+            try:
+                self.analysis_cache.set(ticket_hash, {
+                    "analysis_text": analysis_text,
+                    "timestamp": datetime.now().isoformat(),
+                })
+            except Exception:
+                pass
+            try:
+                self.semantic_cache.set_by_content({"analysis_text": analysis_text}, ticket_hash)
+            except Exception:
+                pass
             # Extract the recommended ticket key from AI response
             recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
 
@@ -543,17 +550,10 @@ Keep response conversational and focused on getting this done."""
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(
-        self,
-        jira_client: Optional[JiraClient] = None,
-        llm_client: Optional[LLMClient] = None,
-        session_manager: Optional[SessionManager] = None,
-    ):
     def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None):
         self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
         self.llm = llm_client or LLMClient()
-        self.session = session_manager or SessionManager()
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
         self.current_focus: Optional[Ticket] = None
@@ -562,6 +562,8 @@ class WorkAssistant:
         self.current_ticket_hash: Optional[str] = None
         self.session_cache = Cache()
         self.saved_focus_key: Optional[str] = None
+        # Provide a semantic cache here as well for assistant-level caching
+        self.semantic_cache = SemanticCache()
 
     def load_state(self):
         """Load persisted session state"""
@@ -595,7 +597,6 @@ class WorkAssistant:
             raw_data=data.get('raw_data', {}),
         )
 
-    def start_session(self):
     def start_session(self, resume: bool = False):
         """Begin a work session"""
         console.print("\n🎯 Personal AI Work Assistant", style="bold blue")
@@ -613,9 +614,7 @@ class WorkAssistant:
             # Start a clean session
             self.session.reset()
 
-        # Fetch tickets
-        with console.status("[bold green]Fetching your tickets..."):
-            self.current_tickets = self.jira.get_my_tickets()
+        # Fetch tickets (single fetch path)
         use_cache = False
         if self.session.last_scan:
             if self.session.needs_rescan():
@@ -643,21 +642,47 @@ class WorkAssistant:
         # Determine ticket hash for caching
         self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
 
-        cached = self.analysis_cache.get(self.current_ticket_hash)
-        if cached:
-            self.current_analysis = cached
+        # Try to load cached analysis summary
+        cached = None
+        try:
+            cached = self.analysis_cache.get(self.current_ticket_hash)
+        except Exception:
+            cached = None
+        if not cached:
+            try:
+                cached = self.semantic_cache.get_by_content(self.current_ticket_hash)
+            except Exception:
+                cached = None
+        if cached and isinstance(cached, dict) and cached.get("summary"):
+            self.current_analysis = WorkloadAnalysis(
+                top_priority=self.current_tickets[0],
+                priority_reasoning="Cached analysis",
+                next_steps=["Review ticket details", "Plan approach", "Execute solution"],
+                can_help_with=["Research the issue", "Create action plan", "Draft status update"],
+                other_notable=self.current_tickets[1:4] if len(self.current_tickets) > 1 else [],
+                summary=cached["summary"],
+            )
         else:
             with console.status("[bold green]Analyzing priorities..."):
                 self.current_analysis = self.llm.analyze_workload(self.current_tickets)
-            self.analysis_cache[self.current_ticket_hash] = self.current_analysis
+            # Store in both caches
+            if hasattr(self.analysis_cache, 'set'):
+                try:
+                    self.analysis_cache.set(self.current_ticket_hash, {"summary": self.current_analysis.summary})
+                except Exception:
+                    pass
+            if hasattr(self.semantic_cache, 'set_by_content'):
+                try:
+                    self.semantic_cache.set_by_content({"summary": self.current_analysis.summary}, self.current_ticket_hash)
+                except Exception:
+                    pass
 
-        # Display the analysis
+        # Display the analysis once
         self._display_analysis()
 
-        # If resuming, automatically focus on last ticket
+        # If resuming, optionally focus on last ticket
         if resume and self.session.get_current_focus():
             self._focus_on_ticket(self.session.get_current_focus())
-        self._display_analysis()
 
         if resume and self.saved_focus_key:
             self._focus_on_ticket(self.saved_focus_key)
@@ -723,8 +748,16 @@ Why it's urgent: {analysis.priority_reasoning}"""
 
     def _refresh_analysis(self):
         """Clear cached analysis and recompute"""
-        if self.current_ticket_hash and self.current_ticket_hash in self.analysis_cache:
-            del self.analysis_cache[self.current_ticket_hash]
+        # Clear caches
+        try:
+            if self.current_ticket_hash and hasattr(self.analysis_cache, 'get'):
+                self.analysis_cache.set(self.current_ticket_hash, {})
+        except Exception:
+            pass
+        try:
+            self.semantic_cache.clear()
+        except Exception:
+            pass
 
         self.llm.clear_cache()
 
@@ -739,7 +772,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
             self.current_analysis = self.llm.analyze_workload(self.current_tickets)
 
         self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
-        self.analysis_cache[self.current_ticket_hash] = self.current_analysis
+        try:
+            self.analysis_cache.set(self.current_ticket_hash, {"summary": self.current_analysis.summary})
+        except Exception:
+            pass
+        try:
+            self.semantic_cache.set_by_content({"summary": self.current_analysis.summary}, self.current_ticket_hash)
+        except Exception:
+            pass
 
         self._display_analysis()
 
@@ -747,18 +787,17 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'refresh', 'quit'")
-        console.print("Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'open <ticket>', 'health', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'check', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
-            console.print(f"  1) Focus top priority ({top_key})  [default]")
-            console.print("  2) List tickets")
-            console.print(f"  3) Help with top priority ({top_key})")
+            console.print(f"  1) View top priority ({top_key})  [default]")
+            console.print("  2) Show tickets")
+            console.print(f"  3) Advise on top priority ({top_key})")
             console.print("  4) Choose a ticket by key")
             console.print("  5) Quit")
         else:
-            console.print("  2) List tickets  [default]")
+            console.print("  2) Show tickets  [default]")
             console.print("  4) Choose a ticket by key")
             console.print("  5) Quit")
         console.print("="*60 + "\n")
@@ -807,18 +846,17 @@ Why it's urgent: {analysis.priority_reasoning}"""
             return False
         
         # List command
-        if input_lower == 'list' or input_lower == '2':
+        if input_lower in ['list','tickets','2']:
             self._list_tickets()
             return False
 
         # Refresh analysis
-        if input_lower in ['refresh']:
-        if input_lower == 'refresh':
+        if input_lower in ['refresh','rescan']:
             self._refresh_analysis()
             return False
 
         # Smart command parsing
-        if input_lower.startswith('focus '):
+        if input_lower.startswith('focus ') or input_lower.startswith('view '):
             ticket_key = user_input[6:].strip()
             self._focus_on_ticket(ticket_key)
             return False
@@ -830,7 +868,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 console.print("No top priority ticket available.", style="yellow")
             return False
         
-        if input_lower.startswith('help '):
+        if input_lower.startswith('help ') or input_lower.startswith('advise '):
             ticket_key = user_input[5:].strip()
             self._get_ticket_help(ticket_key)
             return False
@@ -842,7 +880,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 console.print("No top priority ticket available.", style="yellow")
             return False
         
-        if input_lower.startswith('comment '):
+        if input_lower.startswith('comment ') or input_lower.startswith('update '):
             ticket_key = user_input[8:].strip()
             self._help_with_comment(ticket_key)
             return False
@@ -862,13 +900,13 @@ Why it's urgent: {analysis.priority_reasoning}"""
             return False
 
         # Open ticket in browser (prints URL)
-        if input_lower.startswith('open '):
+        if input_lower.startswith('open ') or input_lower.startswith('link '):
             ticket_key = user_input[5:].strip()
             self._open_ticket(ticket_key)
             return False
 
         # Health check
-        if input_lower == 'health':
+        if input_lower in ['health','check']:
             self._health_check()
             return False
         
@@ -1114,12 +1152,13 @@ Focus on progress, next steps, or findings based on the context provided."""
         table.add_column("Priority", style="red", width=8)
         table.add_column("Status", style="green", width=12)
         table.add_column("Age", style="yellow", width=6)
-        table.add_column("Stale", style="orange", width=6)
+        # Rich doesn't have a builtin 'orange' style; use 'yellow3'
+        table.add_column("Stale", style="yellow3", width=6)
         table.add_column("Summary", style="white")
         
         for ticket in self.current_tickets:
             # Color code by staleness
-            stale_style = "red" if ticket.stale_days > 60 else "yellow" if ticket.stale_days > 30 else "white"
+            stale_style = "red" if ticket.stale_days > 60 else "yellow3" if ticket.stale_days > 30 else "white"
             
             table.add_row(
                 ticket.key,
