@@ -15,6 +15,7 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 import openai
 from dotenv import load_dotenv
+from cache import Cache
 
 # Load environment variables
 load_dotenv()
@@ -199,6 +200,7 @@ class JiraClient:
 class LLMClient:
     def __init__(self):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
+        self.cache = Cache()
         
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -352,13 +354,18 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
 
             return (priority_score + keyword_boost, -ticket.stale_days, -ticket.age_days)
         
-        p1_tickets = [t for t in tickets if t.priority.startswith("P1")]
-        if p1_tickets:
-            top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
+        p0_tickets = [t for t in tickets if (t.priority or "").strip().upper().startswith("P0")]
+        if p0_tickets:
             sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+            top = sorted(p0_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
         else:
-            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-            top = sorted_tickets[0]
+            p1_tickets = [t for t in tickets if (t.priority or "").strip().upper().startswith("P1")]
+            if p1_tickets:
+                sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+                top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
+            else:
+                sorted_tickets = sorted(tickets, key=ticket_urgency_score)
+                top = sorted_tickets[0]
 
         # Generate reasoning
         reasons = []
@@ -387,12 +394,20 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
             summary=f"You have {len(tickets)} tickets. Focus on {top.key} first - {reasoning}."
         )
     
-    def suggest_action(self, ticket: Ticket, context: str = "") -> str:
+    def suggest_action(self, ticket: Ticket, context: str = "", force_refresh: bool = False) -> str:
         """Get AI suggestion for specific ticket action"""
+        cache_key = f"{ticket.key}:{context.strip()}"
+        if not force_refresh:
+            cached = self.cache.get(cache_key)
+            if cached:
+                ts = datetime.fromisoformat(cached.get("timestamp"))
+                if datetime.now() - ts < timedelta(hours=24):
+                    return cached.get("suggestion", "")
+
         prompt = f"""I need help with this Jira ticket:
 
 Ticket: {ticket.key} - {ticket.summary}
-Priority: {ticket.priority} | Status: {ticket.status}  
+Priority: {ticket.priority} | Status: {ticket.status}
 Age: {ticket.age_days} days | Stale: {ticket.stale_days} days
 Comments: {ticket.comments_count} | Type: {ticket.issue_type}
 Labels: {ticket.labels}
@@ -401,7 +416,7 @@ Description: {ticket.description}
 
 Context: {context}
 
-As my work assistant, suggest the most logical next step to move this ticket forward. 
+As my work assistant, suggest the most logical next step to move this ticket forward.
 Be specific and actionable. If there are files to download, configs to check, or people to contact, mention them.
 Offer concrete help with execution.
 
@@ -414,18 +429,20 @@ Keep response conversational and focused on getting this done."""
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.7
                 )
-                return response.choices[0].message.content
-            else:  # ollama  
+                suggestion = response.choices[0].message.content
+            else:  # ollama
                 response = requests.post(f"{self.ollama_host}/api/generate", json={
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False
                 })
-                return response.json()["response"]
-                
-        except Exception as e:
-            # Provide intelligent fallback based on ticket content
-            return self._generate_fallback_suggestion(ticket)
+                suggestion = response.json()["response"]
+
+        except Exception:
+            suggestion = self._generate_fallback_suggestion(ticket)
+
+        self.cache.set(cache_key, {"timestamp": datetime.now().isoformat(), "suggestion": suggestion})
+        return suggestion
     
     def _generate_fallback_suggestion(self, ticket: Ticket) -> str:
         """Generate a helpful suggestion when AI is unavailable"""
