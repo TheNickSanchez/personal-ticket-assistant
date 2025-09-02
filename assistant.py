@@ -205,6 +205,8 @@ class LLMClient:
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # cache for suggestions
         self.cache = Cache()
+        self.semantic_cache = SemanticCache()
+        
 
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
@@ -538,6 +540,17 @@ class WorkAssistant:
         self.last_user_input: str = ""
         self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
         self.current_ticket_hash: Optional[str] = None
+        self.session_cache = Cache()
+        self.saved_focus_key: Optional[str] = None
+
+    def load_state(self):
+        """Load persisted session state"""
+        data = self.session_cache.get("session") or {}
+        self.saved_focus_key = data.get("current_focus")
+
+    def save_state(self):
+        """Persist current focus ticket"""
+        self.session_cache.set("session", {"current_focus": self.current_focus.key if self.current_focus else None})
         self.session_manager = SessionManager()
         self.notes: List[str] = []
 
@@ -546,7 +559,7 @@ class WorkAssistant:
         hash_input = "|".join(sorted(f"{t.key}:{t.updated.isoformat()}" for t in tickets))
         return hashlib.sha256(hash_input.encode()).hexdigest()
 
-    def start_session(self):
+    def start_session(self, resume: bool = False):
         """Begin a work session"""
         console.print("\n🎯 Personal AI Work Assistant", style="bold blue")
         console.print("Let me analyze your current workload...\n")
@@ -573,9 +586,21 @@ class WorkAssistant:
         
         # Display the analysis
         self._display_analysis()
-        
+
+        if resume and self.saved_focus_key:
+            self._focus_on_ticket(self.saved_focus_key)
+
         # Start interactive session
         self._interactive_session()
+
+    def fresh_scan(self):
+        """Force ticket retrieval and fresh analysis"""
+        self.llm.clear_cache()
+        self.analysis_cache = {}
+        self.current_focus = None
+        self.saved_focus_key = None
+        self.save_state()
+        self.start_session()
 
     def _display_analysis(self):
         """Display the AI workload analysis"""
@@ -630,6 +655,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             del self.analysis_cache[self.current_ticket_hash]
 
         self.llm.clear_cache()
+
         console.print("\n🔄 Refreshing workload analysis...")
 
         with console.status("[bold green]Fetching your tickets..."):
@@ -884,8 +910,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if not ticket:
             console.print(f"❌ Couldn't find ticket '{ticket_key}'. Try 'list' to see available tickets.", style="red")
             return
-        
+
         self.current_focus = ticket
+        self.save_state()
         console.print(f"\n🔍 Focusing on {ticket.key}...")
         
         # Show ticket details with proper description formatting
@@ -917,8 +944,9 @@ Description:
         if not ticket:
             console.print(f"❌ Couldn't find ticket '{ticket_key}'", style="red")
             return
-        
+
         self.current_focus = ticket
+        self.save_state()
         console.print(f"\n🆘 Getting help for {ticket.key}...")
         
         with console.status("[bold green]Analyzing ticket and generating help..."):
@@ -1102,10 +1130,21 @@ def main():
         console.print("The assistant will still work with basic analysis.", style="yellow")
     elif llm_provider == 'ollama':
         console.print("🤖 Using Ollama for AI features. Make sure it's running locally.", style="blue")
-    
+
     try:
         assistant = WorkAssistant()
-        assistant.start_session()
+        assistant.load_state()
+        if assistant.saved_focus_key:
+            choice = Prompt.ask(
+                f"Resume work on {assistant.saved_focus_key} or scan for new tickets?",
+                choices=["resume", "scan"],
+            )
+            if choice == "resume":
+                assistant.start_session(resume=True)
+            else:
+                assistant.fresh_scan()
+        else:
+            assistant.fresh_scan()
     except KeyboardInterrupt:
         console.print("\n👋 Session interrupted. See you later!", style="yellow")
     except Exception as e:
