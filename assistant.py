@@ -18,6 +18,7 @@ import openai
 from dotenv import load_dotenv
 from semantic_cache import SemanticCache
 from cache import Cache
+from session_manager import SessionManager
 
 # Load environment variables
 load_dotenv()
@@ -202,8 +203,9 @@ class JiraClient:
 class LLMClient:
     def __init__(self):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
+        # cache for suggestions
         self.cache = Cache()
-        
+
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
             self.model = os.getenv('OPENAI_MODEL', 'gpt-4')
@@ -211,7 +213,8 @@ class LLMClient:
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
 
-        self.cache = SemanticCache()
+        # cache for workload analysis
+        self.semantic_cache = SemanticCache()
     
         # Cache for the last workload analysis
         self._analysis_cache: Optional[WorkloadAnalysis] = None
@@ -260,7 +263,7 @@ class LLMClient:
         ticket_hash_source = json.dumps(sorted_tickets, sort_keys=True, default=str)
         ticket_hash = hashlib.sha256(ticket_hash_source.encode('utf-8')).hexdigest()
 
-        cached = self.cache.get(ticket_hash)
+        cached = self.semantic_cache.get(ticket_hash)
         if cached:
             ts = datetime.fromisoformat(cached["timestamp"])
             if datetime.now() - ts < timedelta(hours=24):
@@ -312,7 +315,7 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                     "stream": False
                 })
                 analysis_text = response.json()["response"]
-            self.cache.set(ticket_hash, analysis_text)
+            self.semantic_cache.set(ticket_hash, analysis_text)
             # Extract the recommended ticket key from AI response
             recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
 
@@ -535,6 +538,8 @@ class WorkAssistant:
         self.last_user_input: str = ""
         self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
         self.current_ticket_hash: Optional[str] = None
+        self.session_manager = SessionManager()
+        self.notes: List[str] = []
 
     def _calculate_ticket_hash(self, tickets: List[Ticket]) -> str:
         """Create a hash representing the current ticket set"""
@@ -624,6 +629,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if self.current_ticket_hash and self.current_ticket_hash in self.analysis_cache:
             del self.analysis_cache[self.current_ticket_hash]
 
+        self.llm.clear_cache()
         console.print("\n🔄 Refreshing workload analysis...")
 
         with console.status("[bold green]Fetching your tickets..."):
@@ -687,6 +693,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         
         # Quit commands
         if input_lower in ['quit', 'exit', 'q', 'bye']:
+            if Confirm.ask("Save progress before exiting?"):
+                self.session_manager.save_progress(self.current_focus, self.notes)
+                console.print("💾 Progress saved.", style="green")
             console.print("👋 Great work session! See you later.", style="green")
             return True
         
