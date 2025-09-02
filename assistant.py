@@ -18,6 +18,7 @@ import openai
 from dotenv import load_dotenv
 from semantic_cache import SemanticCache
 from cache import Cache
+from session_manager import SessionManager
 
 # Load environment variables
 load_dotenv()
@@ -211,7 +212,7 @@ class LLMClient:
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
 
-        self.cache = SemanticCache()
+        self.semantic_cache = SemanticCache()
     
         # Cache for the last workload analysis
         self._analysis_cache: Optional[WorkloadAnalysis] = None
@@ -526,7 +527,8 @@ Keep response conversational and focused on getting this done."""
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None):
+    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None):
+        self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
         self.llm = llm_client or LLMClient()
         self.current_tickets: List[Ticket] = []
@@ -541,23 +543,50 @@ class WorkAssistant:
         hash_input = "|".join(sorted(f"{t.key}:{t.updated.isoformat()}" for t in tickets))
         return hashlib.sha256(hash_input.encode()).hexdigest()
 
+    def _ticket_from_dict(self, data: Dict[str, Any]) -> Ticket:
+        return Ticket(
+            key=data['key'],
+            summary=data['summary'],
+            description=data['description'],
+            priority=data['priority'],
+            status=data['status'],
+            assignee=data.get('assignee'),
+            created=datetime.fromisoformat(data['created']),
+            updated=datetime.fromisoformat(data['updated']),
+            comments_count=data.get('comments_count', 0),
+            labels=data.get('labels', []),
+            issue_type=data.get('issue_type', ''),
+            raw_data=data.get('raw_data', {}),
+        )
+
     def start_session(self):
         """Begin a work session"""
         console.print("\n🎯 Personal AI Work Assistant", style="bold blue")
         console.print("Let me analyze your current workload...\n")
-        
-        # Fetch tickets
-        with console.status("[bold green]Fetching your tickets..."):
-            self.current_tickets = self.jira.get_my_tickets()
+
+        use_cache = False
+        if self.session.last_scan:
+            if self.session.needs_rescan():
+                if not Confirm.ask("Last scan was over 24h ago. Scan again?"):
+                    self.current_tickets = [self._ticket_from_dict(t) for t in self.session.get_tickets()]
+                    use_cache = True
+            else:
+                summary = self.session.get_ticket_summary()
+                if Confirm.ask(f"{summary}\nResume last session?"):
+                    self.current_tickets = [self._ticket_from_dict(t) for t in self.session.get_tickets()]
+                    use_cache = True
+
+        if not use_cache:
+            with console.status("[bold green]Fetching your tickets..."):
+                self.current_tickets = self.jira.get_my_tickets()
+            self.session.update_session(self.current_tickets)
 
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
 
-        # Determine ticket hash for caching
         self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
 
-        # Get AI analysis (use cache when available)
         cached = self.analysis_cache.get(self.current_ticket_hash)
         if cached:
             self.current_analysis = cached
@@ -565,11 +594,9 @@ class WorkAssistant:
             with console.status("[bold green]Analyzing priorities..."):
                 self.current_analysis = self.llm.analyze_workload(self.current_tickets)
             self.analysis_cache[self.current_ticket_hash] = self.current_analysis
-        
-        # Display the analysis
+
         self._display_analysis()
-        
-        # Start interactive session
+
         self._interactive_session()
 
     def _display_analysis(self):
@@ -625,9 +652,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
             del self.analysis_cache[self.current_ticket_hash]
 
         console.print("\n🔄 Refreshing workload analysis...")
+        self.llm.clear_cache()
 
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
+        self.session.update_session(self.current_tickets)
 
         with console.status("[bold green]Analyzing priorities..."):
             self.current_analysis = self.llm.analyze_workload(self.current_tickets)
