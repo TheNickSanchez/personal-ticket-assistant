@@ -16,7 +16,6 @@ from rich.text import Text
 from rich.prompt import Prompt, Confirm
 import openai
 from dotenv import load_dotenv
-from semantic_cache import SemanticCache
 from cache import Cache
 
 # Load environment variables
@@ -203,7 +202,7 @@ class LLMClient:
     def __init__(self):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         self.cache = Cache()
-        
+
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
             self.model = os.getenv('OPENAI_MODEL', 'gpt-4')
@@ -211,8 +210,8 @@ class LLMClient:
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
 
-        self.cache = SemanticCache()
-    
+        self.analysis_cache = Cache("analysis_cache.json")
+
         # Cache for the last workload analysis
         self._analysis_cache: Optional[WorkloadAnalysis] = None
         self._cache_time: Optional[datetime] = None
@@ -221,6 +220,7 @@ class LLMClient:
         """Clear the stored analysis cache."""
         self._analysis_cache = None
         self._cache_time = None
+        self.analysis_cache.clear()
 
     def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Return cached workload analysis when valid."""
@@ -260,7 +260,7 @@ class LLMClient:
         ticket_hash_source = json.dumps(sorted_tickets, sort_keys=True, default=str)
         ticket_hash = hashlib.sha256(ticket_hash_source.encode('utf-8')).hexdigest()
 
-        cached = self.cache.get(ticket_hash)
+        cached = self.analysis_cache.get(ticket_hash)
         if cached:
             ts = datetime.fromisoformat(cached["timestamp"])
             if datetime.now() - ts < timedelta(hours=24):
@@ -312,7 +312,10 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                     "stream": False
                 })
                 analysis_text = response.json()["response"]
-            self.cache.set(ticket_hash, analysis_text)
+            self.analysis_cache.set(ticket_hash, {
+                "analysis_text": analysis_text,
+                "timestamp": datetime.now().isoformat(),
+            })
             # Extract the recommended ticket key from AI response
             recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
 
@@ -701,7 +704,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             return False
 
         # Refresh analysis
-        if input_lower in ['refresh', 're analyze', 're-analyze', 'reanalyze']:
+        if input_lower == 'refresh':
             self._refresh_analysis()
             return False
 
@@ -741,6 +744,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             with console.status("[bold green]Analyzing priorities..."):
                 self.current_analysis = self.llm.analyze_workload(self.current_tickets)
             self._display_analysis()
+            return False
         # Numeric shortcut: 4 = choose a ticket by key (prompt)
         if input_lower == '4':
             key = Prompt.ask("Enter ticket key (e.g., CPE-3117)").strip()
