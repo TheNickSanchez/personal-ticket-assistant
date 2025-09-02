@@ -18,6 +18,7 @@ import openai
 from dotenv import load_dotenv
 from semantic_cache import SemanticCache
 from cache import Cache
+from session_manager import SessionManager
 
 # Load environment variables
 load_dotenv()
@@ -202,8 +203,9 @@ class JiraClient:
 class LLMClient:
     def __init__(self):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
+        # Cache for per-ticket suggestions
         self.cache = Cache()
-        
+
         if self.provider == 'openai':
             openai.api_key = os.getenv('OPENAI_API_KEY')
             self.model = os.getenv('OPENAI_MODEL', 'gpt-4')
@@ -211,7 +213,8 @@ class LLMClient:
             self.ollama_host = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
             self.model = os.getenv('OLLAMA_MODEL', 'llama3.1')
 
-        self.cache = SemanticCache()
+        # Separate cache for workload analysis
+        self.analysis_cache = SemanticCache()
     
         # Cache for the last workload analysis
         self._analysis_cache: Optional[WorkloadAnalysis] = None
@@ -260,7 +263,7 @@ class LLMClient:
         ticket_hash_source = json.dumps(sorted_tickets, sort_keys=True, default=str)
         ticket_hash = hashlib.sha256(ticket_hash_source.encode('utf-8')).hexdigest()
 
-        cached = self.cache.get(ticket_hash)
+        cached = self.analysis_cache.get(ticket_hash)
         if cached:
             ts = datetime.fromisoformat(cached["timestamp"])
             if datetime.now() - ts < timedelta(hours=24):
@@ -312,7 +315,7 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                     "stream": False
                 })
                 analysis_text = response.json()["response"]
-            self.cache.set(ticket_hash, analysis_text)
+            self.analysis_cache.set(ticket_hash, analysis_text)
             # Extract the recommended ticket key from AI response
             recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
 
@@ -526,9 +529,15 @@ Keep response conversational and focused on getting this done."""
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None):
+    def __init__(
+        self,
+        jira_client: Optional[JiraClient] = None,
+        llm_client: Optional[LLMClient] = None,
+        session_manager: Optional[SessionManager] = None,
+    ):
         self.jira = jira_client or JiraClient()
         self.llm = llm_client or LLMClient()
+        self.session = session_manager or SessionManager()
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
         self.current_focus: Optional[Ticket] = None
@@ -545,7 +554,19 @@ class WorkAssistant:
         """Begin a work session"""
         console.print("\n🎯 Personal AI Work Assistant", style="bold blue")
         console.print("Let me analyze your current workload...\n")
-        
+
+        # Determine if we should resume previous session
+        resume = False
+        if self.session.within_24_hours() and self.session.get_current_focus():
+            last = self.session.last_scan.strftime("%Y-%m-%d %H:%M") if self.session.last_scan else "recently"
+            resume = Confirm.ask(
+                f"Resume previous session from {last}?",
+                default=True,
+            )
+        if not resume:
+            # Start a clean session
+            self.session.reset()
+
         # Fetch tickets
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
@@ -553,6 +574,9 @@ class WorkAssistant:
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
+
+        # Record last scan time
+        self.session.set_last_scan()
 
         # Determine ticket hash for caching
         self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
@@ -565,10 +589,14 @@ class WorkAssistant:
             with console.status("[bold green]Analyzing priorities..."):
                 self.current_analysis = self.llm.analyze_workload(self.current_tickets)
             self.analysis_cache[self.current_ticket_hash] = self.current_analysis
-        
+
         # Display the analysis
         self._display_analysis()
-        
+
+        # If resuming, automatically focus on last ticket
+        if resume and self.session.get_current_focus():
+            self._focus_on_ticket(self.session.get_current_focus())
+
         # Start interactive session
         self._interactive_session()
 
@@ -674,6 +702,8 @@ Why it's urgent: {analysis.priority_reasoning}"""
     def _handle_user_input(self, user_input: str) -> bool:
         """Handle various user inputs with improved parsing"""
         input_lower = user_input.lower().strip()
+        if user_input:
+            self.session.add_message(user_input)
         
         # Empty input = default action
         if input_lower == "":
@@ -701,7 +731,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             return False
 
         # Refresh analysis
-        if input_lower in ['refresh', 're analyze', 're-analyze', 'reanalyze']:
+        if input_lower in ['refresh']:
             self._refresh_analysis()
             return False
 
@@ -741,6 +771,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             with console.status("[bold green]Analyzing priorities..."):
                 self.current_analysis = self.llm.analyze_workload(self.current_tickets)
             self._display_analysis()
+            return False
         # Numeric shortcut: 4 = choose a ticket by key (prompt)
         if input_lower == '4':
             key = Prompt.ask("Enter ticket key (e.g., CPE-3117)").strip()
@@ -875,8 +906,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if not ticket:
             console.print(f"❌ Couldn't find ticket '{ticket_key}'. Try 'list' to see available tickets.", style="red")
             return
-        
+
         self.current_focus = ticket
+        self.session.set_current_focus(ticket.key)
         console.print(f"\n🔍 Focusing on {ticket.key}...")
         
         # Show ticket details with proper description formatting
@@ -929,9 +961,12 @@ Description:
             return
         
         console.print(f"\n💬 Let's add a comment to {ticket.key}")
-        
+
         # Get comment context
         context = Prompt.ask("What's the context for this comment? (e.g., 'status update', 'investigation results', 'next steps')")
+
+        # Persist note about progress
+        self.session.add_ticket_note(ticket.key, context)
         
         # Generate comment suggestion
         comment_prompt = f"""Help me draft a professional Jira comment for this ticket:
