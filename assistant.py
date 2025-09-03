@@ -14,6 +14,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from rich.prompt import Prompt, Confirm
+from rich.markdown import Markdown
 import openai
 from dotenv import load_dotenv
 from cache import Cache, SemanticCache
@@ -712,7 +713,7 @@ class WorkAssistant:
         
         # Main analysis panel
         console.print(Panel(
-            clean_summary,
+            Markdown(clean_summary),
             title="🎯 Your Work Analysis",
             title_align="left",
             border_style="blue"
@@ -730,9 +731,9 @@ Labels: {', '.join(ticket.labels) if ticket.labels else 'None'}
 Why it's urgent: {analysis.priority_reasoning}"""
             
             console.print(Panel(
-                priority_text.strip(),
+                Markdown(priority_text.strip()),
                 title="🎯 TOP PRIORITY",
-                title_align="left", 
+                title_align="left",
                 border_style="red"
             ))
         
