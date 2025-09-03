@@ -5,16 +5,16 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from assistant import Ticket, WorkAssistant, WorkloadAnalysis
+from assistant import Ticket, WorkAssistant, WorkloadAnalysis, LLMClient
 from session_manager import SessionManager
 
 
-def _make_ticket(key: str) -> Ticket:
+def _make_ticket(key: str, description: str = "") -> Ticket:
     now = datetime.now()
     return Ticket(
         key=key,
         summary=f"Summary {key}",
-        description="",
+        description=description,
         priority="P2",
         status="Open",
         assignee=None,
@@ -27,24 +27,32 @@ def _make_ticket(key: str) -> Ticket:
     )
 
 
-def test_cached_summary_preserves_top_ticket(tmp_path):
-    t1 = _make_ticket("T1")
+def test_analyze_dependencies_detects_references():
+    t1 = _make_ticket("T1", description="Blocked by T2 and relates to T3")
     t2 = _make_ticket("T2")
+    t3 = _make_ticket("T3")
+    client = LLMClient()
+    deps = client.analyze_dependencies([t1, t2, t3])
+    assert deps == {"T1": ["T2", "T3"]}
 
+
+def test_dependency_cache(tmp_path):
+    t1 = _make_ticket("T1", description="See T2 for details")
+    t2 = _make_ticket("T2")
     jira = MagicMock()
     jira.get_my_tickets.return_value = [t1, t2]
 
     analysis = WorkloadAnalysis(
-        top_priority=t2,
+        top_priority=t1,
         priority_reasoning="",
         next_steps=[],
         can_help_with=[],
         other_notable=[],
-        summary="Focus on T2",
+        summary="Focus on T1",
     )
     llm = MagicMock()
     llm.analyze_workload.return_value = analysis
-    llm.analyze_dependencies.return_value = {}
+    llm.analyze_dependencies.return_value = {"T1": ["T2"]}
 
     session_file = tmp_path / "session.json"
     sm = SessionManager(str(session_file))
@@ -54,16 +62,16 @@ def test_cached_summary_preserves_top_ticket(tmp_path):
     assistant._display_dependencies = MagicMock()
     assistant._interactive_session = MagicMock()
 
-    # First run populates the cache
     with patch("assistant.Confirm.ask", return_value=True):
         assistant.start_session()
+    llm.analyze_dependencies.assert_called_once()
+    assert assistant.current_dependencies == {"T1": ["T2"]}
 
-    # Second run should use cached analysis and not call the LLM
-    llm.analyze_workload.reset_mock()
+    sm.set_current_focus("T1")
+    assistant._focus_on_ticket = MagicMock()
+
+    llm.analyze_dependencies.reset_mock()
     with patch("assistant.Confirm.ask", return_value=True):
         assistant.start_session()
-
-    llm.analyze_workload.assert_not_called()
-    assert assistant.current_analysis.top_priority.key == "T2"
-    assert "T2" in assistant.current_analysis.summary
-
+    llm.analyze_dependencies.assert_not_called()
+    assert assistant.current_dependencies == {"T1": ["T2"]}
