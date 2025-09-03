@@ -19,6 +19,7 @@ class SessionManager:
             "tickets": [],
             "ticket_progress": {},
             "conversation_history": [],
+            "work_patterns": {"commands": {}, "categories": {}},
         }
         self.load()
 
@@ -33,6 +34,8 @@ class SessionManager:
             except Exception:
                 # Corrupt or unreadable; keep defaults
                 pass
+        # Ensure work_patterns structure always exists
+        self.data.setdefault("work_patterns", {"commands": {}, "categories": {}})
 
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
@@ -74,6 +77,26 @@ class SessionManager:
         history: List[str] = self.data.setdefault("conversation_history", [])
         history.append(message)
         self.save()
+
+    # Work pattern logging
+    def log_command(self, command: str) -> None:
+        patterns = self.data.setdefault("work_patterns", {})
+        commands = patterns.setdefault("commands", {})
+        commands[command] = commands.get(command, 0) + 1
+        self.save()
+
+    def log_ticket_category(self, category: str) -> None:
+        patterns = self.data.setdefault("work_patterns", {})
+        categories = patterns.setdefault("categories", {})
+        categories[category] = categories.get(category, 0) + 1
+        self.save()
+
+    def get_work_patterns(self) -> Dict[str, Dict[str, int]]:
+        patterns = self.data.get("work_patterns")
+        if not isinstance(patterns, dict):
+            patterns = {"commands": {}, "categories": {}}
+            self.data["work_patterns"] = patterns
+        return patterns
 
     def reset(self) -> None:
         self.data.update(
