@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from session_manager import SessionManager
+from core.session_manager import SessionManager
 
 
 def test_session_persistence(tmp_path):

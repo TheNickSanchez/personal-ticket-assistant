@@ -1,5 +1,6 @@
-from assistant import WorkAssistant, LLMClient
-from session_manager import SessionManager
+from core.work_assistant import WorkAssistant
+from core.llm_client import LLMClient
+from core.session_manager import SessionManager
 from unittest.mock import MagicMock, call
 
 

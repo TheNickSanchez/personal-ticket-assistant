@@ -5,7 +5,7 @@ Interactive workflow test with CPE-3222
 
 import os
 import time
-from assistant import WorkAssistant
+from core.work_assistant import WorkAssistant
 from dotenv import load_dotenv
 
 load_dotenv()
