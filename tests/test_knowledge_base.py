@@ -2,7 +2,8 @@ from datetime import datetime
 
 from core.knowledge_base import KnowledgeBase
 from core.session_manager import SessionManager
-from assistant import LLMClient, Ticket
+from core.llm_client import LLMClient
+from core.models import Ticket
 
 
 def test_session_manager_records_done_ticket(tmp_path):

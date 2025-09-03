@@ -5,7 +5,9 @@ import sys, os
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from assistant import LLMClient, Ticket, WorkloadAnalysis, WorkAssistant
+from core.llm_client import LLMClient
+from core.models import Ticket, WorkloadAnalysis
+from core.work_assistant import WorkAssistant
 
 
 class AnalysisCacheTests(unittest.TestCase):

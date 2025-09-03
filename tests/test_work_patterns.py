@@ -1,6 +1,7 @@
 import openai
 from datetime import datetime
-from assistant import LLMClient, Ticket
+from core.llm_client import LLMClient
+from core.models import Ticket
 from core.session_manager import SessionManager
 
 

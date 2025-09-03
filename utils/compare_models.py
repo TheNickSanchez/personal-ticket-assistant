@@ -6,7 +6,7 @@ Compare analysis quality between models
 import os
 import time
 from pathlib import Path
-from assistant import WorkAssistant
+from core.work_assistant import WorkAssistant
 from dotenv import load_dotenv
 
 load_dotenv()

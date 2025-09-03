@@ -4,7 +4,9 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from assistant import LLMClient, Ticket, SessionManager
+from core.llm_client import LLMClient
+from core.models import Ticket
+from core.session_manager import SessionManager
 
 class FeedbackLoopTests(unittest.TestCase):
     def setUp(self):
@@ -45,19 +47,19 @@ class FeedbackLoopTests(unittest.TestCase):
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
 
     def test_positive_feedback_loop(self):
-        with patch("assistant.openai.chat.completions.create", return_value=self._mock_resp("first")):
+        with patch("core.llm_client.openai.chat.completions.create", return_value=self._mock_resp("first")):
             self.client.suggest_action(self.ticket, "ctx")
         self.session.add_feedback(self.ticket.key, "ctx", "good")
-        with patch("assistant.openai.chat.completions.create", return_value=self._mock_resp("second")) as mock_create:
+        with patch("core.llm_client.openai.chat.completions.create", return_value=self._mock_resp("second")) as mock_create:
             self.client.suggest_action(self.ticket, "ctx", force_refresh=True)
             prompt = mock_create.call_args[1]["messages"][0]["content"]
             self.assertIn("good", prompt)
 
     def test_negative_feedback_loop(self):
-        with patch("assistant.openai.chat.completions.create", return_value=self._mock_resp("first")):
+        with patch("core.llm_client.openai.chat.completions.create", return_value=self._mock_resp("first")):
             self.client.suggest_action(self.ticket, "ctx")
         self.session.add_feedback(self.ticket.key, "ctx", "bad")
-        with patch("assistant.openai.chat.completions.create", return_value=self._mock_resp("second")) as mock_create:
+        with patch("core.llm_client.openai.chat.completions.create", return_value=self._mock_resp("second")) as mock_create:
             self.client.suggest_action(self.ticket, "ctx", force_refresh=True)
             prompt = mock_create.call_args[1]["messages"][0]["content"]
             self.assertIn("bad", prompt)

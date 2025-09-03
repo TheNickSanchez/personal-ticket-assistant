@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from assistant import Ticket, WorkAssistant, WorkloadAnalysis
+from core.models import Ticket, WorkloadAnalysis
+from core.work_assistant import WorkAssistant
 from core.session_manager import SessionManager
 from integrations.calendar_client import CalendarEvent
 
@@ -56,7 +57,7 @@ def test_events_passed_to_llm(tmp_path):
     assistant._display_analysis = MagicMock()
     assistant._interactive_session = MagicMock()
 
-    with patch("assistant.Confirm.ask", return_value=False):
+    with patch("core.work_assistant.Confirm.ask", return_value=False):
         assistant.start_session()
 
     llm.analyze_workload.assert_called_once()
@@ -76,7 +77,7 @@ def test_check_command_surfaces_events():
 
     from rich.console import Console
     sio = StringIO()
-    with patch("assistant.console", Console(file=sio)):
+    with patch("core.work_assistant.console", Console(file=sio)):
         assistant._handle_user_input("check")
     output = sio.getvalue()
     assert "Planning" in output
