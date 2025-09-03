@@ -244,6 +244,23 @@ class LLMClient:
         self._cache_time = datetime.now()
         return analysis
 
+    def analyze_dependencies(self, tickets: List[Ticket]) -> Dict[str, List[str]]:
+        """Detect simple ticket dependencies based on cross-references."""
+
+        dependencies: Dict[str, List[str]] = {}
+        keys = [t.key for t in tickets]
+        for ticket in tickets:
+            text = f"{ticket.summary} {ticket.description}".lower()
+            deps: List[str] = []
+            for key in keys:
+                if key == ticket.key:
+                    continue
+                if key.lower() in text:
+                    deps.append(key)
+            if deps:
+                dependencies[ticket.key] = deps
+        return dependencies
+
     def _compute_analysis(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
         
@@ -592,6 +609,7 @@ class WorkAssistant:
         self.llm = llm_client or LLMClient()
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
+        self.current_dependencies: Dict[str, List[str]] = {}
         self.current_focus: Optional[Ticket] = None
         self.last_user_input: str = ""
         self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
@@ -670,6 +688,16 @@ class WorkAssistant:
                 self.current_tickets = self.jira.get_my_tickets()
             self.session.update_session(self.current_tickets)
 
+        if not use_cache:
+            deps = self.llm.analyze_dependencies(self.current_tickets)
+            self.session.set_dependencies(deps)
+        else:
+            deps = self.session.get_dependencies()
+            if not deps:
+                deps = self.llm.analyze_dependencies(self.current_tickets)
+                self.session.set_dependencies(deps)
+        self.current_dependencies = deps
+
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
@@ -734,6 +762,7 @@ class WorkAssistant:
 
         # Display the analysis once
         self._display_analysis()
+        self._display_dependencies()
 
         # If resuming, optionally focus on last ticket
         if resume and self.session.get_current_focus():
@@ -801,6 +830,18 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 border_style="green"
             ))
 
+    def _display_dependencies(self):
+        """Display detected ticket dependencies."""
+        if not self.current_dependencies:
+            return
+
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Ticket")
+        table.add_column("Depends On")
+        for key, deps in self.current_dependencies.items():
+            table.add_row(key, ", ".join(deps))
+        console.print(Panel(table, title="🔗 Dependencies", border_style="magenta"))
+
     def _refresh_analysis(self):
         """Clear cached analysis and recompute"""
         # Clear caches
@@ -822,6 +863,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
         self.session.update_session(self.current_tickets)
+        deps = self.llm.analyze_dependencies(self.current_tickets)
+        self.session.set_dependencies(deps)
+        self.current_dependencies = deps
 
         with console.status("[bold green]Analyzing priorities..."):
             self.current_analysis = self.llm.analyze_workload(self.current_tickets)
@@ -837,6 +881,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             pass
 
         self._display_analysis()
+        self._display_dependencies()
 
     def _interactive_session(self):
         """Handle interactive conversation with the user"""
