@@ -21,6 +21,8 @@ from dotenv import load_dotenv
 from cache import Cache, SemanticCache
 from session_manager import SessionManager
 from integrations.email_client import EmailClient
+from integrations.slack_client import SlackClient
+from integrations.github_client import GitHubClient
 
 # Load environment variables
 load_dotenv()
@@ -244,6 +246,23 @@ class LLMClient:
         self._analysis_cache = analysis
         self._cache_time = datetime.now()
         return analysis
+
+    def analyze_dependencies(self, tickets: List[Ticket]) -> Dict[str, List[str]]:
+        """Detect simple ticket dependencies based on cross-references."""
+
+        dependencies: Dict[str, List[str]] = {}
+        keys = [t.key for t in tickets]
+        for ticket in tickets:
+            text = f"{ticket.summary} {ticket.description}".lower()
+            deps: List[str] = []
+            for key in keys:
+                if key == ticket.key:
+                    continue
+                if key.lower() in text:
+                    deps.append(key)
+            if deps:
+                dependencies[ticket.key] = deps
+        return dependencies
 
     def _compute_analysis(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
@@ -587,12 +606,20 @@ Keep response conversational and focused on getting this done."""
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None):
+    def __init__(
+        self,
+        jira_client: Optional[JiraClient] = None,
+        llm_client: Optional[LLMClient] = None,
+        session_manager: Optional[SessionManager] = None,
+        slack_client: Optional[SlackClient] = None,
+    ):
         self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
         self.llm = llm_client or LLMClient()
+        self.slack = slack_client
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
+        self.current_dependencies: Dict[str, List[str]] = {}
         self.current_focus: Optional[Ticket] = None
         self.last_user_input: str = ""
         self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
@@ -673,6 +700,16 @@ class WorkAssistant:
                 self.current_tickets = self.jira.get_my_tickets()
             self.session.update_session(self.current_tickets)
 
+        if not use_cache:
+            deps = self.llm.analyze_dependencies(self.current_tickets)
+            self.session.set_dependencies(deps)
+        else:
+            deps = self.session.get_dependencies()
+            if not deps:
+                deps = self.llm.analyze_dependencies(self.current_tickets)
+                self.session.set_dependencies(deps)
+        self.current_dependencies = deps
+
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
@@ -737,6 +774,7 @@ class WorkAssistant:
 
         # Display the analysis once
         self._display_analysis()
+        self._display_dependencies()
 
         # If resuming, optionally focus on last ticket
         if resume and self.session.get_current_focus():
@@ -804,6 +842,18 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 border_style="green"
             ))
 
+    def _display_dependencies(self):
+        """Display detected ticket dependencies."""
+        if not self.current_dependencies:
+            return
+
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Ticket")
+        table.add_column("Depends On")
+        for key, deps in self.current_dependencies.items():
+            table.add_row(key, ", ".join(deps))
+        console.print(Panel(table, title="🔗 Dependencies", border_style="magenta"))
+
     def _refresh_analysis(self):
         """Clear cached analysis and recompute"""
         # Clear caches
@@ -825,6 +875,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
         self.session.update_session(self.current_tickets)
+        deps = self.llm.analyze_dependencies(self.current_tickets)
+        self.session.set_dependencies(deps)
+        self.current_dependencies = deps
 
         with console.status("[bold green]Analyzing priorities..."):
             self.current_analysis = self.llm.analyze_workload(self.current_tickets)
@@ -840,12 +893,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
             pass
 
         self._display_analysis()
+        self._display_dependencies()
 
     def _interactive_session(self):
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
         console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'email <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'github-pr <ticket>', 'check', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
@@ -946,6 +1001,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if input_lower.startswith('email '):
             ticket_key = user_input[6:].strip()
             self._email_ticket(ticket_key)
+        if input_lower.startswith('notify '):
+            ticket_key = user_input[7:].strip()
+            self._notify_ticket(ticket_key)
             return False
 
         if input_lower in ['re analyze', 'reanalyze', 're-analyze']:
@@ -971,6 +1029,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if input_lower.startswith('write '):
             filename = user_input[6:].strip()
             self._create_file(filename)
+            return False
+
+        if input_lower.startswith('github-pr '):
+            ticket_key = user_input[10:].strip()
+            self._create_github_pr(ticket_key)
             return False
 
         # Health check
@@ -1009,6 +1072,27 @@ Why it's urgent: {analysis.priority_reasoning}"""
             console.print("💡 Try: '2'/'list' to see your tickets, or 'help' for available commands")
 
         return False
+
+    def _notify_ticket(self, ticket_key: str):
+        """Send a Slack notification about a ticket"""
+        ticket = self._find_ticket(ticket_key)
+        if not ticket:
+            console.print(f"❌ Couldn't find ticket '{ticket_key}'. Try 'list' to see available tickets.", style="red")
+            return
+        message = (
+            f"*{ticket.key}* - {ticket.summary}\n"
+            f"Priority: {ticket.priority} | Status: {ticket.status}\n"
+            f"{os.getenv('JIRA_BASE_URL', '').rstrip('/')}/browse/{ticket.key}"
+        )
+        try:
+            if not self.slack:
+                self.slack = SlackClient()
+            if self.slack.send_message(message):
+                console.print("✅ Notification sent to Slack", style="green")
+            else:
+                console.print("⚠️ Failed to send Slack notification", style="yellow")
+        except Exception as e:
+            console.print(f"❌ Slack notification error: {e}", style="red")
 
     def _open_ticket(self, ticket_key: str):
         """Print the Jira URL for a ticket, to open manually"""
@@ -1079,6 +1163,27 @@ Why it's urgent: {analysis.priority_reasoning}"""
         file_path.write_text(content)
         console.print(f"💾 Created file: {file_path}")
         return file_path
+
+    def _create_github_pr(self, ticket_key: str):
+        """Create a GitHub branch, commit, and PR for a ticket."""
+        if not ticket_key:
+            console.print("❌ Please provide a ticket key.", style="red")
+            return
+        token = os.getenv("GITHUB_TOKEN")
+        repo = os.getenv("GITHUB_REPO")
+        if not token or not repo:
+            console.print("❌ Missing GITHUB_TOKEN or GITHUB_REPO in environment.", style="red")
+            return
+        client = GitHubClient(token, repo)
+        branch = ticket_key.replace(" ", "-")
+        filename = self._sanitize_filename(f"{ticket_key}.txt")
+        try:
+            client.create_branch(branch)
+            client.create_commit(branch, filename, f"Auto-generated file for {ticket_key}", f"chore: add {ticket_key}")
+            pr = client.create_pull_request(branch, f"{ticket_key} work", f"Auto-generated PR for {ticket_key}")
+            console.print(f"✅ Created PR: {pr.get('html_url', 'N/A')}", style="green")
+        except Exception as e:
+            console.print(f"❌ Failed to create PR: {e}", style="red")
     
     def _handle_contextual_input(self, input_lower: str) -> bool:
         """Handle input when we have a current focus ticket"""
@@ -1303,9 +1408,11 @@ Basic Commands:
 • help <ticket-key> - Get AI assistance and action suggestions
 • comment <ticket-key> - Draft and post a comment with AI help
 • email <ticket-key> - Send an email update with AI-generated content
+• notify <ticket-key> - Send ticket summary to Slack
 • refresh - Re-run workload analysis
 • open <ticket-key> - Print the Jira URL to open in browser
 • health - Run environment and connectivity checks
+• github-pr <ticket-key> - Create a GitHub branch and PR
 • quit - End the session
 
 Smart Commands:
