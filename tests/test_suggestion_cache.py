@@ -5,7 +5,8 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from assistant import LLMClient, Ticket
+from core.llm_client import LLMClient
+from core.models import Ticket
 
 class SuggestionCacheTests(unittest.TestCase):
     def setUp(self):
@@ -42,7 +43,7 @@ class SuggestionCacheTests(unittest.TestCase):
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=text))])
 
     def test_cached_suggestion_reused(self):
-        with patch("assistant.openai.chat.completions.create", return_value=self._mock_resp("first")) as mock_create:
+        with patch("core.llm_client.openai.chat.completions.create", return_value=self._mock_resp("first")) as mock_create:
             first = self.client.suggest_action(self.ticket, "ctx")
             second = self.client.suggest_action(self.ticket, "ctx")
             self.assertEqual(first, "first")
@@ -51,7 +52,7 @@ class SuggestionCacheTests(unittest.TestCase):
 
     def test_force_refresh(self):
         responses = [self._mock_resp("first"), self._mock_resp("second")]
-        with patch("assistant.openai.chat.completions.create", side_effect=responses) as mock_create:
+        with patch("core.llm_client.openai.chat.completions.create", side_effect=responses) as mock_create:
             first = self.client.suggest_action(self.ticket, "ctx")
             second = self.client.suggest_action(self.ticket, "ctx", force_refresh=True)
             self.assertEqual(first, "first")
@@ -60,7 +61,7 @@ class SuggestionCacheTests(unittest.TestCase):
 
     def test_cache_expiration(self):
         responses = [self._mock_resp("first"), self._mock_resp("second")]
-        with patch("assistant.openai.chat.completions.create", side_effect=responses) as mock_create:
+        with patch("core.llm_client.openai.chat.completions.create", side_effect=responses) as mock_create:
             first = self.client.suggest_action(self.ticket, "ctx")
             key = f"{self.ticket.key}:ctx"
             cached = self.client.cache.get(key)

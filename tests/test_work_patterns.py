@@ -1,7 +1,8 @@
 import openai
 from datetime import datetime
-from assistant import LLMClient, Ticket
-from session_manager import SessionManager
+from core.llm_client import LLMClient
+from core.models import Ticket
+from core.session_manager import SessionManager
 
 
 def test_work_patterns_persist(tmp_path):

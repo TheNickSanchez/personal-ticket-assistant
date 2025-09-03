@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from assistant import WorkAssistant, LLMClient, Ticket
-from session_manager import SessionManager
+from core.work_assistant import WorkAssistant
+from core.llm_client import LLMClient
+from core.models import Ticket
+from core.session_manager import SessionManager
 
 
 def make_ticket(key: str, summary: str) -> Ticket:
@@ -47,7 +49,8 @@ def test_previous_ticket_context_in_prompt(tmp_path, monkeypatch):
         captured["prompt"] = messages[0]["content"]
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))])
 
-    monkeypatch.setattr("assistant.openai.chat.completions.create", fake_create)
+    monkeypatch.setattr("core.llm_client.openai.chat.completions.create", fake_create)
+    monkeypatch.setattr("core.work_assistant.Prompt.ask", lambda *a, **k: "good")
 
     wa._focus_on_ticket("T2")
 

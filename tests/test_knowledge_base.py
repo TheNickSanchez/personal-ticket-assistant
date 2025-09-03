@@ -1,8 +1,9 @@
 from datetime import datetime
 
-from knowledge_base import KnowledgeBase
-from session_manager import SessionManager
-from assistant import LLMClient, Ticket
+from core.knowledge_base import KnowledgeBase
+from core.session_manager import SessionManager
+from core.llm_client import LLMClient
+from core.models import Ticket
 
 
 def test_session_manager_records_done_ticket(tmp_path):

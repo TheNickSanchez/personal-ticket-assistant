@@ -4,7 +4,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
-from knowledge_base import KnowledgeBase
+from .knowledge_base import KnowledgeBase
 
 
 class SessionManager:
