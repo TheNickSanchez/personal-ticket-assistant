@@ -312,7 +312,7 @@ class LLMClient:
                 cached = None
         if not cached and hasattr(self.semantic_cache, 'get_by_content'):
             cached = self.semantic_cache.get_by_content(ticket_hash)
-        if cached:
+        if cached and isinstance(cached, dict) and "timestamp" in cached:
             ts = datetime.fromisoformat(cached["timestamp"])
             if datetime.now() - ts < timedelta(hours=24):
                 analysis_text = cached["analysis_text"]
@@ -528,7 +528,7 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
             cache_key = base_key
         if not force_refresh:
             cached = self.cache.get(cache_key)
-            if cached:
+            if cached and isinstance(cached, dict) and "timestamp" in cached:
                 ts = datetime.fromisoformat(cached.get("timestamp"))
                 if datetime.now() - ts < timedelta(hours=24):
                     return cached.get("suggestion", "")
@@ -991,6 +991,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
                     break
                     
             except KeyboardInterrupt:
+                console.print("\n👋 Session ended. Good luck with your tickets!", style="yellow")
+                break
+            except EOFError:
                 console.print("\n👋 Session ended. Good luck with your tickets!", style="yellow")
                 break
             except Exception as e:

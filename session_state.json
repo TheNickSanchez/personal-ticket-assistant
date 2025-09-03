@@ -1,5 +1,5 @@
 {
-  "last_scan": "2025-09-03T13:36:29.856795",
+  "last_scan": "2025-09-03T14:01:00.770263",
   "current_focus": null,
   "tickets": [
     {
@@ -27482,22 +27482,19 @@
     }
   ],
   "ticket_progress": {},
-  "conversation_history": [
-    "5",
-    "5"
-  ],
+  "conversation_history": [],
   "recent_tickets": [],
   "feedback": {},
   "work_patterns": {
     "commands": {
-      "analyze_workload": 2
+      "analyze_workload": 1
     },
     "categories": {
-      "Task": 16,
-      "Bug": 2,
-      "Story": 30,
-      "Epic": 14,
-      "Sub-task": 4
+      "Task": 8,
+      "Bug": 1,
+      "Story": 15,
+      "Epic": 7,
+      "Sub-task": 2
     }
   },
   "dependencies": {}
