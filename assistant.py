@@ -562,6 +562,16 @@ Keep response conversational and focused on getting this done."""
 
         return f"{base_suggestion}\n\nI can help you:\n• Break down the task into steps\n• Draft status updates\n• Research related issues\n\nWhat would be most helpful?"
 
+    def plan(self, goal: str, steps: List[str]) -> str:
+        """Generate the next step in a planning sequence including prior steps."""
+        history = "\n".join(steps) if steps else "None"
+        prompt = (
+            f"We are planning how to {goal}.\n"
+            f"Steps so far:\n{history}\n"
+            "Provide the next step in the plan."
+        )
+        return self.generate_text(prompt)
+
     def generate_text(self, prompt: str) -> str:
         """Generate arbitrary text from a prompt."""
         try:
@@ -842,7 +852,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'plan <goal>', 'write <filename>', 'check', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
@@ -965,6 +975,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
             self._create_file(filename)
             return False
 
+        if input_lower.startswith('plan'):
+            goal = user_input[5:].strip()
+            self._planning_workflow(goal)
+            return False
+
         # Health check
         if input_lower in ['health','check']:
             self._health_check()
@@ -1071,7 +1086,30 @@ Why it's urgent: {analysis.priority_reasoning}"""
         file_path.write_text(content)
         console.print(f"💾 Created file: {file_path}")
         return file_path
-    
+
+    def _planning_workflow(self, goal: str):
+        """Generate or continue an action plan, persisting steps."""
+        if goal:
+            # start a new plan, reset history to only this goal
+            self.session.data["conversation_history"] = [f"plan {goal}"]
+            self.session.save()
+            steps: List[str] = []
+        else:
+            history = self.session.data.get("conversation_history", [])
+            if history and history[-1].strip().lower() == "plan":
+                history = history[:-1]
+                self.session.data["conversation_history"] = history
+                self.session.save()
+            if not history:
+                console.print("No active plan. Use 'plan <goal>' to begin.", style="yellow")
+                return
+            goal_line = history[0]
+            goal = goal_line[5:] if goal_line.lower().startswith("plan ") else goal_line
+            steps = history[1:]
+        next_step = self.llm.plan(goal, steps)
+        self.session.add_message(next_step)
+        console.print(Panel(next_step, title="📝 Plan", border_style="cyan"))
+
     def _handle_contextual_input(self, input_lower: str) -> bool:
         """Handle input when we have a current focus ticket"""
         if not self.current_focus:
