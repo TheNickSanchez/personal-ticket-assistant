@@ -279,7 +279,16 @@ class LLMClient:
             ts = datetime.fromisoformat(cached["timestamp"])
             if datetime.now() - ts < timedelta(hours=24):
                 analysis_text = cached["analysis_text"]
-                recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
+                recommended_ticket = None
+                # Use cached top_key when available to avoid re-parsing
+                cached_key = cached.get("top_key") if isinstance(cached, dict) else None
+                if cached_key:
+                    for t in tickets:
+                        if t.key == cached_key:
+                            recommended_ticket = t
+                            break
+                if not recommended_ticket:
+                    recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
                 return self._parse_analysis(analysis_text, tickets, recommended_ticket)
 
         prompt = f"""You are my intelligent work assistant. I have {len(tickets)} open tickets that need attention.
@@ -327,19 +336,25 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                 })
                 analysis_text = response.json()["response"]
             # cache minimal analysis in file-backed cache
+            # Extract the recommended ticket key from AI response
+            recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
+
+            # cache minimal analysis in file-backed cache including recommended key
             try:
                 self.analysis_cache.set(ticket_hash, {
                     "analysis_text": analysis_text,
+                    "top_key": recommended_ticket.key if recommended_ticket else None,
                     "timestamp": datetime.now().isoformat(),
                 })
             except Exception:
                 pass
             try:
-                self.semantic_cache.set_by_content({"analysis_text": analysis_text}, ticket_hash)
+                self.semantic_cache.set_by_content({
+                    "analysis_text": analysis_text,
+                    "top_key": recommended_ticket.key if recommended_ticket else None,
+                }, ticket_hash)
             except Exception:
                 pass
-            # Extract the recommended ticket key from AI response
-            recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
 
             return self._parse_analysis(analysis_text, tickets, recommended_ticket)
             
@@ -655,8 +670,19 @@ class WorkAssistant:
             except Exception:
                 cached = None
         if cached and isinstance(cached, dict) and cached.get("summary"):
+            # Determine top ticket from cached key when available
+            top_ticket = None
+            top_key = cached.get("top_key")
+            if top_key:
+                for t in self.current_tickets:
+                    if t.key == top_key:
+                        top_ticket = t
+                        break
+            if not top_ticket and self.current_tickets:
+                top_ticket = self.current_tickets[0]
+
             self.current_analysis = WorkloadAnalysis(
-                top_priority=self.current_tickets[0],
+                top_priority=top_ticket,
                 priority_reasoning="Cached analysis",
                 next_steps=["Review ticket details", "Plan approach", "Execute solution"],
                 can_help_with=["Research the issue", "Create action plan", "Draft status update"],
@@ -667,14 +693,20 @@ class WorkAssistant:
             with console.status("[bold green]Analyzing priorities..."):
                 self.current_analysis = self.llm.analyze_workload(self.current_tickets)
             # Store in both caches
+            cache_payload = {
+                "summary": self.current_analysis.summary,
+                "top_key": self.current_analysis.top_priority.key if self.current_analysis.top_priority else None,
+            }
             if hasattr(self.analysis_cache, 'set'):
                 try:
-                    self.analysis_cache.set(self.current_ticket_hash, {"summary": self.current_analysis.summary})
+                    self.analysis_cache.set(self.current_ticket_hash, cache_payload)
                 except Exception:
                     pass
+            else:
+                self.analysis_cache[self.current_ticket_hash] = cache_payload
             if hasattr(self.semantic_cache, 'set_by_content'):
                 try:
-                    self.semantic_cache.set_by_content({"summary": self.current_analysis.summary}, self.current_ticket_hash)
+                    self.semantic_cache.set_by_content(cache_payload, self.current_ticket_hash)
                 except Exception:
                     pass
 
