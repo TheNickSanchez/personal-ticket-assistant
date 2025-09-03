@@ -205,11 +205,15 @@ class JiraClient:
 # ==============================================================================
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, session_manager: Optional[SessionManager] = None):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # Cache for per-ticket suggestions
         self.cache = Cache()
         self.semantic_cache = SemanticCache()
+        self.session = session_manager
+        self.work_patterns: Dict[str, Dict[str, int]] = {}
+        if self.session:
+            self.work_patterns = self.session.get_work_patterns()
         
 
         if self.provider == 'openai':
@@ -235,6 +239,13 @@ class LLMClient:
     def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Return cached workload analysis when valid."""
 
+        if self.session:
+            self.session.log_command("analyze_workload")
+            for t in tickets:
+                if t.issue_type:
+                    self.session.log_ticket_category(t.issue_type)
+            self.work_patterns = self.session.get_work_patterns()
+
         if (
             self._analysis_cache
             and self._cache_time
@@ -242,11 +253,12 @@ class LLMClient:
         ):
             return self._analysis_cache
 
-        analysis = self._compute_analysis(tickets)
+        analysis = self._compute_analysis(tickets, self.work_patterns)
         self._analysis_cache = analysis
         self._cache_time = datetime.now()
         return analysis
 
+    def _compute_analysis(self, tickets: List[Ticket], patterns: Optional[Dict[str, Dict[str, int]]] = None) -> WorkloadAnalysis:
     def analyze_dependencies(self, tickets: List[Ticket]) -> Dict[str, List[str]]:
         """Detect simple ticket dependencies based on cross-references."""
 
@@ -312,11 +324,17 @@ class LLMClient:
                     recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
                 return self._parse_analysis(analysis_text, tickets, recommended_ticket)
 
+        category_focus = ""
+        if patterns and patterns.get("categories"):
+            sorted_cats = sorted(patterns["categories"].items(), key=lambda x: x[1], reverse=True)
+            cat_list = ", ".join(cat for cat, _ in sorted_cats)
+            category_focus = f"\nThe user frequently works on: {cat_list}. Prioritize these categories when relevant.\n"
+
         prompt = f"""You are my intelligent work assistant. I have {len(tickets)} open tickets that need attention.
 
 My tickets:
 {json.dumps(ticket_summaries, indent=2, default=str)}
-
+{category_focus}
 Please analyze my workload and help me prioritize. Be conversational and helpful, like a smart colleague.
 
 IMPORTANT PRIORITY RULES:
@@ -615,6 +633,7 @@ class WorkAssistant:
     ):
         self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
+        self.llm = llm_client or LLMClient(session_manager=self.session)
         self.llm = llm_client or LLMClient()
         self.slack = slack_client
         self.current_tickets: List[Ticket] = []
