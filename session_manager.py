@@ -4,6 +4,8 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from knowledge_base import KnowledgeBase
+
 
 class SessionManager:
     """Manage persisted session data: last scan, current focus, notes, history.
@@ -11,7 +13,9 @@ class SessionManager:
     Stores a single JSON file next to the project root by default.
     """
 
-    def __init__(self, path: str = "session_state.json") -> None:
+    def __init__(
+        self, path: str = "session_state.json", knowledge_base_path: str = "knowledge_base.json"
+    ) -> None:
         self.path = path
         self.data: Dict[str, Any] = {
             "last_scan": None,
@@ -20,7 +24,11 @@ class SessionManager:
             "ticket_progress": {},
             "conversation_history": [],
             "recent_tickets": [],
+            "feedback": {},
+            "work_patterns": {"commands": {}, "categories": {}},
+            "dependencies": {},
         }
+        self.kb = KnowledgeBase(knowledge_base_path)
         self.load()
 
     # Basic file IO
@@ -34,6 +42,8 @@ class SessionManager:
             except Exception:
                 # Corrupt or unreadable; keep defaults
                 pass
+        # Ensure work_patterns structure always exists
+        self.data.setdefault("work_patterns", {"commands": {}, "categories": {}})
 
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
@@ -95,6 +105,44 @@ class SessionManager:
         if exclude:
             recent = [t for t in recent if t.get("key") != exclude]
         return recent[-limit:]
+    def add_feedback(self, ticket_key: str, context: str, feedback: str) -> None:
+        feedback_store: Dict[str, Dict[str, List[str]]] = self.data.setdefault("feedback", {})
+        ticket_fb: Dict[str, List[str]] = feedback_store.setdefault(ticket_key, {})
+        ctx_key = context.strip()
+        entries: List[str] = ticket_fb.setdefault(ctx_key, [])
+        entries.append(feedback)
+        self.save()
+
+    def get_feedback(self, ticket_key: str, context: str) -> List[str]:
+        feedback_store: Dict[str, Dict[str, List[str]]] = self.data.get("feedback", {})
+        ticket_fb: Dict[str, List[str]] = feedback_store.get(ticket_key, {})
+        return list(ticket_fb.get(context.strip(), []))
+    # Work pattern logging
+    def log_command(self, command: str) -> None:
+        patterns = self.data.setdefault("work_patterns", {})
+        commands = patterns.setdefault("commands", {})
+        commands[command] = commands.get(command, 0) + 1
+        self.save()
+
+    def log_ticket_category(self, category: str) -> None:
+        patterns = self.data.setdefault("work_patterns", {})
+        categories = patterns.setdefault("categories", {})
+        categories[category] = categories.get(category, 0) + 1
+        self.save()
+
+    def get_work_patterns(self) -> Dict[str, Dict[str, int]]:
+        patterns = self.data.get("work_patterns")
+        if not isinstance(patterns, dict):
+            patterns = {"commands": {}, "categories": {}}
+            self.data["work_patterns"] = patterns
+        return patterns
+    def set_dependencies(self, deps: Dict[str, List[str]]) -> None:
+        self.data["dependencies"] = deps
+        self.save()
+
+    def get_dependencies(self) -> Dict[str, List[str]]:
+        return dict(self.data.get("dependencies", {}))
+
 
     def reset(self) -> None:
         self.data.update(
@@ -105,6 +153,8 @@ class SessionManager:
                 "ticket_progress": {},
                 "conversation_history": [],
                 "recent_tickets": [],
+                "feedback": {},
+                "dependencies": {},
             }
         )
         self.save()
@@ -119,9 +169,21 @@ class SessionManager:
         return data
 
     def update_session(self, tickets: List[Any]) -> None:
+        previous = {t.get("key"): t for t in self.data.get("tickets", []) if isinstance(t, dict)}
+        for ticket in tickets:
+            key = getattr(ticket, "key", None)
+            status = getattr(ticket, "status", None)
+            prev_status = previous.get(key, {}).get("status") if key else None
+            if key and status == "Done" and prev_status != "Done":
+                self.record_resolution(ticket)
         self.data["tickets"] = [self._serialize_ticket(t) for t in tickets]
         self.set_last_scan()
         self.save()
+
+    def record_resolution(self, ticket: Any) -> None:
+        summary = getattr(ticket, "summary", "")
+        resolution = getattr(ticket, "resolution", "") or getattr(ticket, "description", "")
+        self.kb.add(getattr(ticket, "key", ""), summary, resolution)
 
     def needs_rescan(self) -> bool:
         last = self.last_scan

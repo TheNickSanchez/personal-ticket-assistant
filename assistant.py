@@ -20,6 +20,10 @@ import openai
 from dotenv import load_dotenv
 from cache import Cache, SemanticCache
 from session_manager import SessionManager
+from knowledge_base import KnowledgeBase
+from integrations.email_client import EmailClient
+from integrations.slack_client import SlackClient
+from integrations.github_client import GitHubClient
 
 # Load environment variables
 load_dotenv()
@@ -202,11 +206,18 @@ class JiraClient:
 # ==============================================================================
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, knowledge_base: Optional[KnowledgeBase] = None):
+    def __init__(self, session_manager: Optional[SessionManager] = None):
+        self.session = session_manager or SessionManager()
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # Cache for per-ticket suggestions
         self.cache = Cache()
         self.semantic_cache = SemanticCache()
+        self.knowledge_base = knowledge_base or KnowledgeBase()
+        self.session = session_manager
+        self.work_patterns: Dict[str, Dict[str, int]] = {}
+        if self.session:
+            self.work_patterns = self.session.get_work_patterns()
         
 
         if self.provider == 'openai':
@@ -232,6 +243,13 @@ class LLMClient:
     def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Return cached workload analysis when valid."""
 
+        if self.session:
+            self.session.log_command("analyze_workload")
+            for t in tickets:
+                if t.issue_type:
+                    self.session.log_ticket_category(t.issue_type)
+            self.work_patterns = self.session.get_work_patterns()
+
         if (
             self._analysis_cache
             and self._cache_time
@@ -239,10 +257,28 @@ class LLMClient:
         ):
             return self._analysis_cache
 
-        analysis = self._compute_analysis(tickets)
+        analysis = self._compute_analysis(tickets, self.work_patterns)
         self._analysis_cache = analysis
         self._cache_time = datetime.now()
         return analysis
+
+    def _compute_analysis(self, tickets: List[Ticket], patterns: Optional[Dict[str, Dict[str, int]]] = None) -> WorkloadAnalysis:
+    def analyze_dependencies(self, tickets: List[Ticket]) -> Dict[str, List[str]]:
+        """Detect simple ticket dependencies based on cross-references."""
+
+        dependencies: Dict[str, List[str]] = {}
+        keys = [t.key for t in tickets]
+        for ticket in tickets:
+            text = f"{ticket.summary} {ticket.description}".lower()
+            deps: List[str] = []
+            for key in keys:
+                if key == ticket.key:
+                    continue
+                if key.lower() in text:
+                    deps.append(key)
+            if deps:
+                dependencies[ticket.key] = deps
+        return dependencies
 
     def _compute_analysis(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
@@ -292,11 +328,17 @@ class LLMClient:
                     recommended_ticket = self._extract_recommended_ticket(analysis_text, tickets)
                 return self._parse_analysis(analysis_text, tickets, recommended_ticket)
 
+        category_focus = ""
+        if patterns and patterns.get("categories"):
+            sorted_cats = sorted(patterns["categories"].items(), key=lambda x: x[1], reverse=True)
+            cat_list = ", ".join(cat for cat, _ in sorted_cats)
+            category_focus = f"\nThe user frequently works on: {cat_list}. Prioritize these categories when relevant.\n"
+
         prompt = f"""You are my intelligent work assistant. I have {len(tickets)} open tickets that need attention.
 
 My tickets:
 {json.dumps(ticket_summaries, indent=2, default=str)}
-
+{category_focus}
 Please analyze my workload and help me prioritize. Be conversational and helpful, like a smart colleague.
 
 IMPORTANT PRIORITY RULES:
@@ -509,6 +551,12 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                 if datetime.now() - ts < timedelta(hours=24):
                     return cached.get("suggestion", "")
 
+        similar = self.knowledge_base.search(ticket.summary)
+        kb_text = ""
+        if similar:
+            lines = [f"- {e['summary']}: {e['resolution']}" for e in similar[:3]]
+            kb_text = "\nSimilar past tickets:\n" + "\n".join(lines) + "\n"
+
         prompt = f"""I need help with this Jira ticket:
 
 Ticket: {ticket.key} - {ticket.summary}
@@ -522,6 +570,10 @@ Description: {ticket.description}
 Context: {context}
 
 """
+{kb_text}
+As my work assistant, suggest the most logical next step to move this ticket forward.
+Be specific and actionable. If there are files to download, configs to check, or people to contact, mention them.
+Offer concrete help with execution.
 
         if related_tickets:
             prompt += "Recently discussed tickets:\n"
@@ -535,6 +587,10 @@ Context: {context}
             "Offer concrete help with execution.\n\n"
             "Keep response conversational and focused on getting this done."
         )
+
+        past_feedback = self.session.get_feedback(ticket.key, context)
+        if past_feedback:
+            prompt += f"\n\nPrevious feedback: {', '.join(past_feedback)}"
 
         try:
             if self.provider == 'openai':
@@ -555,6 +611,9 @@ Context: {context}
         except Exception:
             suggestion = self._generate_fallback_suggestion(ticket)
 
+        if similar:
+            past = "\n" + kb_text.strip() if kb_text else ""
+            suggestion = f"{past}\n{suggestion}".strip()
         self.cache.set(cache_key, {"timestamp": datetime.now().isoformat(), "suggestion": suggestion})
         return suggestion
     
@@ -582,6 +641,16 @@ Context: {context}
 
         return f"{base_suggestion}\n\nI can help you:\n• Break down the task into steps\n• Draft status updates\n• Research related issues\n\nWhat would be most helpful?"
 
+    def plan(self, goal: str, steps: List[str]) -> str:
+        """Generate the next step in a planning sequence including prior steps."""
+        history = "\n".join(steps) if steps else "None"
+        prompt = (
+            f"We are planning how to {goal}.\n"
+            f"Steps so far:\n{history}\n"
+            "Provide the next step in the plan."
+        )
+        return self.generate_text(prompt)
+
     def generate_text(self, prompt: str) -> str:
         """Generate arbitrary text from a prompt."""
         try:
@@ -606,12 +675,22 @@ Context: {context}
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None):
+    def __init__(
+        self,
+        jira_client: Optional[JiraClient] = None,
+        llm_client: Optional[LLMClient] = None,
+        session_manager: Optional[SessionManager] = None,
+        slack_client: Optional[SlackClient] = None,
+    ):
         self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
+        self.llm = llm_client or LLMClient(self.session)
+        self.llm = llm_client or LLMClient(session_manager=self.session)
         self.llm = llm_client or LLMClient()
+        self.slack = slack_client
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
+        self.current_dependencies: Dict[str, List[str]] = {}
         self.current_focus: Optional[Ticket] = None
         self.last_user_input: str = ""
         self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
@@ -620,6 +699,8 @@ class WorkAssistant:
         self.saved_focus_key: Optional[str] = None
         # Provide a semantic cache here as well for assistant-level caching
         self.semantic_cache = SemanticCache()
+        # Email client for sending ticket updates
+        self.email_client = EmailClient()
         # Default directory for generated files
         self.output_dir = os.getenv('OUTPUT_DIR', 'output')
 
@@ -690,6 +771,16 @@ class WorkAssistant:
                 self.current_tickets = self.jira.get_my_tickets()
             self.session.update_session(self.current_tickets)
 
+        if not use_cache:
+            deps = self.llm.analyze_dependencies(self.current_tickets)
+            self.session.set_dependencies(deps)
+        else:
+            deps = self.session.get_dependencies()
+            if not deps:
+                deps = self.llm.analyze_dependencies(self.current_tickets)
+                self.session.set_dependencies(deps)
+        self.current_dependencies = deps
+
         if not self.current_tickets:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
@@ -754,6 +845,7 @@ class WorkAssistant:
 
         # Display the analysis once
         self._display_analysis()
+        self._display_dependencies()
 
         # If resuming, optionally focus on last ticket
         if resume and self.session.get_current_focus():
@@ -821,6 +913,18 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 border_style="green"
             ))
 
+    def _display_dependencies(self):
+        """Display detected ticket dependencies."""
+        if not self.current_dependencies:
+            return
+
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Ticket")
+        table.add_column("Depends On")
+        for key, deps in self.current_dependencies.items():
+            table.add_row(key, ", ".join(deps))
+        console.print(Panel(table, title="🔗 Dependencies", border_style="magenta"))
+
     def _refresh_analysis(self):
         """Clear cached analysis and recompute"""
         # Clear caches
@@ -842,6 +946,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         with console.status("[bold green]Fetching your tickets..."):
             self.current_tickets = self.jira.get_my_tickets()
         self.session.update_session(self.current_tickets)
+        deps = self.llm.analyze_dependencies(self.current_tickets)
+        self.session.set_dependencies(deps)
+        self.current_dependencies = deps
 
         with console.status("[bold green]Analyzing priorities..."):
             self.current_analysis = self.llm.analyze_workload(self.current_tickets)
@@ -857,12 +964,15 @@ Why it's urgent: {analysis.priority_reasoning}"""
             pass
 
         self._display_analysis()
+        self._display_dependencies()
 
     def _interactive_session(self):
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'plan <goal>', 'write <filename>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'email <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'github-pr <ticket>', 'check', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
@@ -960,6 +1070,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
             self._help_with_comment(ticket_key)
             return False
 
+        if input_lower.startswith('email '):
+            ticket_key = user_input[6:].strip()
+            self._email_ticket(ticket_key)
+        if input_lower.startswith('notify '):
+            ticket_key = user_input[7:].strip()
+            self._notify_ticket(ticket_key)
+            return False
+
         if input_lower in ['re analyze', 'reanalyze', 're-analyze']:
             console.print("🔁 Re-analyzing your workload...")
             self.llm.clear_cache()
@@ -983,6 +1101,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if input_lower.startswith('write '):
             filename = user_input[6:].strip()
             self._create_file(filename)
+            return False
+
+        if input_lower.startswith('plan'):
+            goal = user_input[5:].strip()
+            self._planning_workflow(goal)
+        if input_lower.startswith('github-pr '):
+            ticket_key = user_input[10:].strip()
+            self._create_github_pr(ticket_key)
             return False
 
         # Health check
@@ -1021,6 +1147,27 @@ Why it's urgent: {analysis.priority_reasoning}"""
             console.print("💡 Try: '2'/'list' to see your tickets, or 'help' for available commands")
 
         return False
+
+    def _notify_ticket(self, ticket_key: str):
+        """Send a Slack notification about a ticket"""
+        ticket = self._find_ticket(ticket_key)
+        if not ticket:
+            console.print(f"❌ Couldn't find ticket '{ticket_key}'. Try 'list' to see available tickets.", style="red")
+            return
+        message = (
+            f"*{ticket.key}* - {ticket.summary}\n"
+            f"Priority: {ticket.priority} | Status: {ticket.status}\n"
+            f"{os.getenv('JIRA_BASE_URL', '').rstrip('/')}/browse/{ticket.key}"
+        )
+        try:
+            if not self.slack:
+                self.slack = SlackClient()
+            if self.slack.send_message(message):
+                console.print("✅ Notification sent to Slack", style="green")
+            else:
+                console.print("⚠️ Failed to send Slack notification", style="yellow")
+        except Exception as e:
+            console.print(f"❌ Slack notification error: {e}", style="red")
 
     def _open_ticket(self, ticket_key: str):
         """Print the Jira URL for a ticket, to open manually"""
@@ -1091,6 +1238,53 @@ Why it's urgent: {analysis.priority_reasoning}"""
         file_path.write_text(content)
         console.print(f"💾 Created file: {file_path}")
         return file_path
+
+    def _planning_workflow(self, goal: str):
+        """Generate or continue an action plan, persisting steps."""
+        if goal:
+            # start a new plan, reset history to only this goal
+            self.session.data["conversation_history"] = [f"plan {goal}"]
+            self.session.save()
+            steps: List[str] = []
+        else:
+            history = self.session.data.get("conversation_history", [])
+            if history and history[-1].strip().lower() == "plan":
+                history = history[:-1]
+                self.session.data["conversation_history"] = history
+                self.session.save()
+            if not history:
+                console.print("No active plan. Use 'plan <goal>' to begin.", style="yellow")
+                return
+            goal_line = history[0]
+            goal = goal_line[5:] if goal_line.lower().startswith("plan ") else goal_line
+            steps = history[1:]
+        next_step = self.llm.plan(goal, steps)
+        self.session.add_message(next_step)
+        console.print(Panel(next_step, title="📝 Plan", border_style="cyan"))
+
+    def _prompt_feedback(self, ticket: Ticket, context: str) -> None:
+        feedback = Prompt.ask("Was this suggestion helpful?", choices=["good", "bad"])
+        self.session.add_feedback(ticket.key, context, feedback)
+    def _create_github_pr(self, ticket_key: str):
+        """Create a GitHub branch, commit, and PR for a ticket."""
+        if not ticket_key:
+            console.print("❌ Please provide a ticket key.", style="red")
+            return
+        token = os.getenv("GITHUB_TOKEN")
+        repo = os.getenv("GITHUB_REPO")
+        if not token or not repo:
+            console.print("❌ Missing GITHUB_TOKEN or GITHUB_REPO in environment.", style="red")
+            return
+        client = GitHubClient(token, repo)
+        branch = ticket_key.replace(" ", "-")
+        filename = self._sanitize_filename(f"{ticket_key}.txt")
+        try:
+            client.create_branch(branch)
+            client.create_commit(branch, filename, f"Auto-generated file for {ticket_key}", f"chore: add {ticket_key}")
+            pr = client.create_pull_request(branch, f"{ticket_key} work", f"Auto-generated PR for {ticket_key}")
+            console.print(f"✅ Created PR: {pr.get('html_url', 'N/A')}", style="green")
+        except Exception as e:
+            console.print(f"❌ Failed to create PR: {e}", style="red")
     
     def _handle_contextual_input(self, input_lower: str) -> bool:
         """Handle input when we have a current focus ticket"""
@@ -1107,12 +1301,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
             console.print(f"🔍 Let me research {ticket.key} for you...")
             suggestion = self.llm.suggest_action(ticket, "Research this issue deeply and provide technical insights")
             console.print(Panel(suggestion, title="🔬 Research Results", border_style="blue"))
+            self._prompt_feedback(ticket, "Research this issue deeply and provide technical insights")
             return False
-        
+
         if any(word in input_lower for word in ['plan', 'steps', 'action']):
             console.print(f"📋 Creating action plan for {ticket.key}...")
             plan = self.llm.suggest_action(ticket, "Create a detailed step-by-step action plan")
             console.print(Panel(plan, title="📋 Action Plan", border_style="green"))
+            self._prompt_feedback(ticket, "Create a detailed step-by-step action plan")
             return False
         
         if any(word in input_lower for word in ['comment', 'update', 'status']):
@@ -1156,8 +1352,11 @@ Description:
         # Get AI suggestions
         with console.status("[bold green]Getting AI suggestions..."):
             suggestion = self.llm.suggest_action(ticket, related_tickets=related)
+            suggestion = self.llm.suggest_action(ticket)
+
 
         console.print(Panel(suggestion, title="🤖 AI Suggestion", border_style="green"))
+        self._prompt_feedback(ticket, "")
         
         # Ask for next action
         console.print(f"\n💡 I can help you with {ticket.key}. What would you like to do?")
@@ -1176,8 +1375,9 @@ Description:
         
         with console.status("[bold green]Analyzing ticket and generating help..."):
             suggestion = self.llm.suggest_action(ticket, "The user specifically asked for help with this ticket")
-        
+
         console.print(Panel(suggestion, title=f"🤖 How to tackle {ticket.key}", border_style="green"))
+        self._prompt_feedback(ticket, "The user specifically asked for help with this ticket")
         
         # Ask if they want to take action
         if Confirm.ask("\nWould you like me to help you take action on this ticket?"):
@@ -1229,6 +1429,26 @@ Focus on progress, next steps, or findings based on the context provided."""
                 console.print("✅ Comment posted successfully!", style="green")
             else:
                 console.print("❌ Failed to post comment", style="red")
+
+    def _email_ticket(self, ticket_key: str):
+        """Generate and send an email update about a ticket."""
+        ticket = self._find_ticket(ticket_key)
+        if not ticket:
+            console.print(f"❌ Couldn't find ticket '{ticket_key}'", style="red")
+            return
+
+        console.print(f"\n✉️ Drafting email for {ticket.key}...")
+        subject = f"Update on {ticket.key}: {ticket.summary}"
+        with console.status("[bold green]Generating email content..."):
+            body = self.llm.suggest_action(
+                ticket,
+                "Write a concise status email to stakeholders about this ticket"
+            )
+        try:
+            self.email_client.send_email(subject, body)
+            console.print("✅ Email sent!", style="green")
+        except Exception as e:
+            console.print(f"❌ Failed to send email: {e}", style="red")
     
     def _offer_actions(self, ticket: Ticket):
         """Offer specific actions for a ticket"""
@@ -1246,10 +1466,12 @@ Focus on progress, next steps, or findings based on the context provided."""
             console.print("🔍 Let me research this issue...")
             research = self.llm.suggest_action(ticket, "Research this issue deeply and provide technical insights")
             console.print(Panel(research, title="🔬 Research Results", border_style="blue"))
+            self._prompt_feedback(ticket, "Research this issue deeply and provide technical insights")
         elif choice == "3":
             console.print("📋 Creating action plan...")
             plan = self.llm.suggest_action(ticket, "Create a detailed step-by-step action plan to resolve this ticket")
             console.print(Panel(plan, title="📋 Action Plan", border_style="green"))
+            self._prompt_feedback(ticket, "Create a detailed step-by-step action plan to resolve this ticket")
         else:
             console.print("👍 No problem! Let me know if you need help with anything else.")
     
@@ -1301,9 +1523,12 @@ Basic Commands:
 • focus <ticket-key> - Get detailed analysis of a specific ticket
 • help <ticket-key> - Get AI assistance and action suggestions
 • comment <ticket-key> - Draft and post a comment with AI help
+• email <ticket-key> - Send an email update with AI-generated content
+• notify <ticket-key> - Send ticket summary to Slack
 • refresh - Re-run workload analysis
 • open <ticket-key> - Print the Jira URL to open in browser
 • health - Run environment and connectivity checks
+• github-pr <ticket-key> - Create a GitHub branch and PR
 • quit - End the session
 
 Smart Commands:
