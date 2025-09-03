@@ -202,7 +202,8 @@ class JiraClient:
 # ==============================================================================
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, session_manager: Optional[SessionManager] = None):
+        self.session = session_manager or SessionManager()
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # Cache for per-ticket suggestions
         self.cache = Cache()
@@ -516,6 +517,10 @@ Offer concrete help with execution.
 
 Keep response conversational and focused on getting this done."""
 
+        past_feedback = self.session.get_feedback(ticket.key, context)
+        if past_feedback:
+            prompt += f"\n\nPrevious feedback: {', '.join(past_feedback)}"
+
         try:
             if self.provider == 'openai':
                 response = openai.chat.completions.create(
@@ -589,7 +594,7 @@ class WorkAssistant:
     def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None):
         self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
-        self.llm = llm_client or LLMClient()
+        self.llm = llm_client or LLMClient(self.session)
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
         self.current_focus: Optional[Ticket] = None
@@ -1071,6 +1076,10 @@ Why it's urgent: {analysis.priority_reasoning}"""
         file_path.write_text(content)
         console.print(f"💾 Created file: {file_path}")
         return file_path
+
+    def _prompt_feedback(self, ticket: Ticket, context: str) -> None:
+        feedback = Prompt.ask("Was this suggestion helpful?", choices=["good", "bad"])
+        self.session.add_feedback(ticket.key, context, feedback)
     
     def _handle_contextual_input(self, input_lower: str) -> bool:
         """Handle input when we have a current focus ticket"""
@@ -1087,12 +1096,14 @@ Why it's urgent: {analysis.priority_reasoning}"""
             console.print(f"🔍 Let me research {ticket.key} for you...")
             suggestion = self.llm.suggest_action(ticket, "Research this issue deeply and provide technical insights")
             console.print(Panel(suggestion, title="🔬 Research Results", border_style="blue"))
+            self._prompt_feedback(ticket, "Research this issue deeply and provide technical insights")
             return False
-        
+
         if any(word in input_lower for word in ['plan', 'steps', 'action']):
             console.print(f"📋 Creating action plan for {ticket.key}...")
             plan = self.llm.suggest_action(ticket, "Create a detailed step-by-step action plan")
             console.print(Panel(plan, title="📋 Action Plan", border_style="green"))
+            self._prompt_feedback(ticket, "Create a detailed step-by-step action plan")
             return False
         
         if any(word in input_lower for word in ['comment', 'update', 'status']):
@@ -1129,8 +1140,9 @@ Description:
         # Get AI suggestions
         with console.status("[bold green]Getting AI suggestions..."):
             suggestion = self.llm.suggest_action(ticket)
-        
+
         console.print(Panel(suggestion, title="🤖 AI Suggestion", border_style="green"))
+        self._prompt_feedback(ticket, "")
         
         # Ask for next action
         console.print(f"\n💡 I can help you with {ticket.key}. What would you like to do?")
@@ -1149,8 +1161,9 @@ Description:
         
         with console.status("[bold green]Analyzing ticket and generating help..."):
             suggestion = self.llm.suggest_action(ticket, "The user specifically asked for help with this ticket")
-        
+
         console.print(Panel(suggestion, title=f"🤖 How to tackle {ticket.key}", border_style="green"))
+        self._prompt_feedback(ticket, "The user specifically asked for help with this ticket")
         
         # Ask if they want to take action
         if Confirm.ask("\nWould you like me to help you take action on this ticket?"):
@@ -1219,10 +1232,12 @@ Focus on progress, next steps, or findings based on the context provided."""
             console.print("🔍 Let me research this issue...")
             research = self.llm.suggest_action(ticket, "Research this issue deeply and provide technical insights")
             console.print(Panel(research, title="🔬 Research Results", border_style="blue"))
+            self._prompt_feedback(ticket, "Research this issue deeply and provide technical insights")
         elif choice == "3":
             console.print("📋 Creating action plan...")
             plan = self.llm.suggest_action(ticket, "Create a detailed step-by-step action plan to resolve this ticket")
             console.print(Panel(plan, title="📋 Action Plan", border_style="green"))
+            self._prompt_feedback(ticket, "Create a detailed step-by-step action plan to resolve this ticket")
         else:
             console.print("👍 No problem! Let me know if you need help with anything else.")
     
