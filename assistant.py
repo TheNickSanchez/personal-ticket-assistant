@@ -20,6 +20,7 @@ import openai
 from dotenv import load_dotenv
 from cache import Cache, SemanticCache
 from session_manager import SessionManager
+from integrations.calendar_client import CalendarClient, CalendarEvent
 from knowledge_base import KnowledgeBase
 from integrations.email_client import EmailClient
 from integrations.slack_client import SlackClient
@@ -240,7 +241,7 @@ class LLMClient:
         self._cache_time = None
         self.analysis_cache.clear()
 
-    def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
+    def analyze_workload(self, tickets: List[Ticket], events: Optional[List[CalendarEvent]] = None) -> WorkloadAnalysis:
         """Return cached workload analysis when valid."""
 
         if self.session:
@@ -257,11 +258,13 @@ class LLMClient:
         ):
             return self._analysis_cache
 
+        analysis = self._compute_analysis(tickets, events)
         analysis = self._compute_analysis(tickets, self.work_patterns)
         self._analysis_cache = analysis
         self._cache_time = datetime.now()
         return analysis
 
+    def _compute_analysis(self, tickets: List[Ticket], events: Optional[List[CalendarEvent]] = None) -> WorkloadAnalysis:
     def _compute_analysis(self, tickets: List[Ticket], patterns: Optional[Dict[str, Dict[str, int]]] = None) -> WorkloadAnalysis:
     def analyze_dependencies(self, tickets: List[Ticket]) -> Dict[str, List[str]]:
         """Detect simple ticket dependencies based on cross-references."""
@@ -299,9 +302,17 @@ class LLMClient:
                 'description': ticket.description[:300] if ticket.description else "No description"
             })
         
+        event_summaries = []
+        for ev in events or []:
+            event_summaries.append({
+                'summary': ev.summary,
+                'start': ev.start.isoformat(),
+                'end': ev.end.isoformat(),
+            })
+
         sorted_tickets = sorted(ticket_summaries, key=lambda t: t['key'])
-        ticket_hash_source = json.dumps(sorted_tickets, sort_keys=True, default=str)
-        ticket_hash = hashlib.sha256(ticket_hash_source.encode('utf-8')).hexdigest()
+        state_hash_source = json.dumps({'tickets': sorted_tickets, 'events': event_summaries}, sort_keys=True, default=str)
+        ticket_hash = hashlib.sha256(state_hash_source.encode('utf-8')).hexdigest()
 
         # Try both caches: file key and semantic (by content)
         cached = None
@@ -338,6 +349,10 @@ class LLMClient:
 
 My tickets:
 {json.dumps(ticket_summaries, indent=2, default=str)}
+
+Upcoming calendar events:
+{json.dumps(event_summaries, indent=2, default=str)}
+
 {category_focus}
 Please analyze my workload and help me prioritize. Be conversational and helpful, like a smart colleague.
 
@@ -675,6 +690,7 @@ Offer concrete help with execution.
 # ==============================================================================
 
 class WorkAssistant:
+    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None, calendar_client: Optional[CalendarClient] = None):
     def __init__(
         self,
         jira_client: Optional[JiraClient] = None,
@@ -687,6 +703,7 @@ class WorkAssistant:
         self.llm = llm_client or LLMClient(self.session)
         self.llm = llm_client or LLMClient(session_manager=self.session)
         self.llm = llm_client or LLMClient()
+        self.calendar = calendar_client or CalendarClient()
         self.slack = slack_client
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
@@ -695,6 +712,7 @@ class WorkAssistant:
         self.last_user_input: str = ""
         self.analysis_cache: Dict[str, WorkloadAnalysis] = {}
         self.current_ticket_hash: Optional[str] = None
+        self.upcoming_events: List[CalendarEvent] = []
         self.session_cache = Cache()
         self.saved_focus_key: Optional[str] = None
         # Provide a semantic cache here as well for assistant-level caching
@@ -703,6 +721,7 @@ class WorkAssistant:
         self.email_client = EmailClient()
         # Default directory for generated files
         self.output_dir = os.getenv('OUTPUT_DIR', 'output')
+        self._next_schedule_check = datetime.now()
 
     def load_state(self):
         """Load persisted session state"""
@@ -715,9 +734,15 @@ class WorkAssistant:
         self.session_manager = SessionManager()
         self.notes: List[str] = []
 
-    def _calculate_ticket_hash(self, tickets: List[Ticket]) -> str:
-        """Create a hash representing the current ticket set"""
-        hash_input = "|".join(sorted(f"{t.key}:{t.updated.isoformat()}" for t in tickets))
+    def _calculate_ticket_hash(self, tickets: List[Ticket], events: Optional[List[CalendarEvent]] = None) -> str:
+        """Create a hash representing the current ticket and calendar state"""
+        ticket_part = "|".join(sorted(f"{t.key}:{t.updated.isoformat()}" for t in tickets))
+        event_part = "|".join(
+            sorted(
+                f"{e.summary}:{e.start.isoformat()}:{e.end.isoformat()}" for e in (events or [])
+            )
+        )
+        hash_input = ticket_part + "#" + event_part
         return hashlib.sha256(hash_input.encode()).hexdigest()
 
     def _ticket_from_dict(self, data: Dict[str, Any]) -> Ticket:
@@ -785,11 +810,14 @@ class WorkAssistant:
             console.print("No open tickets found. Time to take a break! ☕", style="green")
             return
 
+        # Fetch upcoming calendar events
+        self.upcoming_events = self.calendar.get_upcoming_events()
+
         # Record last scan time
         self.session.set_last_scan()
 
-        # Determine ticket hash for caching
-        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
+        # Determine ticket hash for caching (includes calendar state)
+        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets, self.upcoming_events)
 
         # Try to load cached analysis summary
         cached = None
@@ -824,7 +852,7 @@ class WorkAssistant:
             )
         else:
             with console.status("[bold green]Analyzing priorities..."):
-                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
             # Store in both caches
             cache_payload = {
                 "summary": self.current_analysis.summary,
@@ -950,10 +978,12 @@ Why it's urgent: {analysis.priority_reasoning}"""
         self.session.set_dependencies(deps)
         self.current_dependencies = deps
 
-        with console.status("[bold green]Analyzing priorities..."):
-            self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+        self.upcoming_events = self.calendar.get_upcoming_events()
 
-        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets)
+        with console.status("[bold green]Analyzing priorities..."):
+            self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
+
+        self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets, self.upcoming_events)
         try:
             self.analysis_cache.set(self.current_ticket_hash, {"summary": self.current_analysis.summary})
         except Exception:
@@ -970,6 +1000,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'check', 'health', 'rescan', 'quit'")
         console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'plan <goal>', 'write <filename>', 'check', 'rescan', 'quit'")
         console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'email <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
         console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'github-pr <ticket>', 'check', 'rescan', 'quit'")
@@ -989,6 +1020,9 @@ Why it's urgent: {analysis.priority_reasoning}"""
         
         while True:
             try:
+                if datetime.now() >= self._next_schedule_check:
+                    self._schedule_check(auto=True)
+                    self._next_schedule_check = datetime.now() + timedelta(minutes=30)
                 user_input = Prompt.ask("\n[bold blue]What should we tackle?[/bold blue] (press Enter for default)").strip()
                 self.last_user_input = user_input.lower()
                 
@@ -1082,7 +1116,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             console.print("🔁 Re-analyzing your workload...")
             self.llm.clear_cache()
             with console.status("[bold green]Analyzing priorities..."):
-                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
             self._display_analysis()
             return False
         # Numeric shortcut: 4 = choose a ticket by key (prompt)
@@ -1103,6 +1137,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
             self._create_file(filename)
             return False
 
+        # Schedule and health checks
+        if input_lower == 'check':
+            self._schedule_check()
+            return False
+        if input_lower == 'health':
         if input_lower.startswith('plan'):
             goal = user_input[5:].strip()
             self._planning_workflow(goal)
@@ -1142,7 +1181,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if self.current_analysis and self.current_analysis.top_priority:
             top_ticket = self.current_analysis.top_priority.key
             console.print(f"💡 Try: Enter, '1', or 'focus {top_ticket}' to work on your top priority")
-            console.print("Or '2'/'list' to see all your tickets, 'health' for diagnostics")
+            console.print("Or '2'/'list' to see all your tickets, 'check' for schedule, 'health' for diagnostics")
         else:
             console.print("💡 Try: '2'/'list' to see your tickets, or 'help' for available commands")
 
@@ -1180,6 +1219,37 @@ Why it's urgent: {analysis.priority_reasoning}"""
             return
         url = f"{base}/browse/{ticket_key.upper()}"
         console.print(f"🔗 {url}")
+
+    def _schedule_check(self, auto: bool = False) -> str:
+        """Display upcoming events and free slots from the calendar."""
+        events = self.calendar.get_upcoming_events()
+        now = datetime.now()
+        if not events:
+            msg = "No upcoming events. Calendar is clear."
+            if auto:
+                console.print(f"📅 {msg}")
+            else:
+                console.print(Panel(msg, title="📅 Schedule", title_align="left", border_style="magenta"))
+            return msg
+
+        events = sorted(events, key=lambda e: e.start)
+        next_event = events[0]
+        lines = []
+        if next_event.start > now:
+            lines.append(f"Free until {next_event.start.strftime('%H:%M')}")
+        lines.append(f"Next event {next_event.start.strftime('%H:%M')}: {next_event.summary}")
+        last_end = next_event.end
+        for ev in events[1:]:
+            if ev.start - last_end >= timedelta(minutes=30):
+                lines.append(f"Free slot {last_end.strftime('%H:%M')} - {ev.start.strftime('%H:%M')}")
+                break
+            last_end = max(last_end, ev.end)
+        msg = "\n".join(lines)
+        if auto:
+            console.print(f"📅 {msg}")
+        else:
+            console.print(Panel(msg, title="📅 Schedule", title_align="left", border_style="magenta"))
+        return msg
 
     def _health_check(self):
         """Run a quick environment and connectivity check"""
