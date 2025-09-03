@@ -40,7 +40,15 @@ ollama pull llama3.1
 # Make sure it's running (default: http://localhost:11434)
 ```
 
-### 5. Run Your Assistant
+### 5. Configure GitHub (optional)
+1. Create a personal access token at https://github.com/settings/tokens with `repo` scope
+2. Add to `.env`:
+   ```bash
+   GITHUB_TOKEN=ghp_your_token_here
+   GITHUB_REPO=owner/repo  # e.g. myuser/myrepo
+   ```
+
+### 6. Run Your Assistant
 ```bash
 python assistant.py
 ```
@@ -70,6 +78,7 @@ Let me analyze your current workload...
 
 💬 Let's work together! What would you like to do?
 Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'email <ticket>', 'refresh', 'quit'
+Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'github-pr <ticket>', 'refresh', 'quit'
 
 What should we tackle? help SEC-2847
 
@@ -90,6 +99,7 @@ I can help you with SEC-2847 in these ways:
 - `help <ticket>` - Get AI suggestions and offers to help with actions
 - `comment <ticket>` - Draft and post a comment with AI assistance
 - `email <ticket>` - Send a status email with AI-generated content
+- `github-pr <ticket>` - Create a GitHub branch and pull request
 - `refresh` - Re-run workload analysis
 - `quit` - End your work session
 
@@ -135,6 +145,12 @@ OPENAI_MODEL=gpt-4  # or gpt-3.5-turbo for faster/cheaper
 LLM_PROVIDER=ollama
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=llama3.1  # or codestral, mistral, etc.
+```
+
+### GitHub Integration (optional)
+```bash
+GITHUB_TOKEN=ghp_your_token_here
+GITHUB_REPO=owner/repo  # e.g. myuser/myrepo
 ```
 
 ## Customization

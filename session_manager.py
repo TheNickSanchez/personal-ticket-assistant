@@ -19,6 +19,7 @@ class SessionManager:
             "tickets": [],
             "ticket_progress": {},
             "conversation_history": [],
+            "dependencies": {},
         }
         self.load()
 
@@ -75,6 +76,13 @@ class SessionManager:
         history.append(message)
         self.save()
 
+    def set_dependencies(self, deps: Dict[str, List[str]]) -> None:
+        self.data["dependencies"] = deps
+        self.save()
+
+    def get_dependencies(self) -> Dict[str, List[str]]:
+        return dict(self.data.get("dependencies", {}))
+
     def reset(self) -> None:
         self.data.update(
             {
@@ -83,6 +91,7 @@ class SessionManager:
                 "tickets": [],
                 "ticket_progress": {},
                 "conversation_history": [],
+                "dependencies": {},
             }
         )
         self.save()
