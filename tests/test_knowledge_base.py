@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from knowledge_base import KnowledgeBase
-from session_manager import SessionManager
+from core.knowledge_base import KnowledgeBase
+from core.session_manager import SessionManager
 from assistant import LLMClient, Ticket
 
 

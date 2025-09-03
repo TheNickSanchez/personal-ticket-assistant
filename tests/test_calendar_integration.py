@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from assistant import Ticket, WorkAssistant, WorkloadAnalysis
-from session_manager import SessionManager
+from core.session_manager import SessionManager
 from integrations.calendar_client import CalendarEvent
 
 
@@ -49,6 +49,7 @@ def test_events_passed_to_llm(tmp_path):
     )
     llm = MagicMock()
     llm.analyze_workload.return_value = analysis
+    llm.analyze_dependencies.return_value = {}
 
     sm = SessionManager(str(tmp_path / "session.json"))
     assistant = WorkAssistant(jira_client=jira, llm_client=llm, session_manager=sm, calendar_client=calendar)

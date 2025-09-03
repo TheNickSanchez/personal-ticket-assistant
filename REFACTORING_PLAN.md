@@ -14,6 +14,8 @@ personal-ticket-assistant/
 ├── assistant.py              # 🎯 MAIN ENTRY POINT (~50 lines)
 ├── core/                     # 🧠 CORE BUSINESS LOGIC
 │   ├── __init__.py
+│   ├── session_manager.py   # Move from root
+│   ├── knowledge_base.py    # Move from root
 │   ├── models.py            # Data models (Ticket, WorkloadAnalysis)
 │   ├── llm_client.py        # LLM abstraction and caching
 │   ├── work_assistant.py    # Main orchestrator class
@@ -35,13 +37,22 @@ personal-ticket-assistant/
 ├── utils/                   # 🛠️ UTILITIES
 │   ├── __init__.py
 │   ├── cache.py             # Move from root
-│   ├── session_manager.py   # Move from root
-│   └── knowledge_base.py    # Move from root
+│   ├── semantic_cache.py    # Legacy cache (moved from root)
+│   ├── compare_models.py    # Model comparison script
+│   └── model_performance.py # Performance testing script
 └── tests/                   # 🧪 TESTS (NEW)
     ├── test_models.py
     ├── test_llm_client.py
     └── test_jira_client.py
 ```
+
+## ♻️ Utility Module Status
+
+- `core/session_manager.py` and `core/knowledge_base.py` were moved from the project root to the `core/` package.
+- `utils/cache.py` now houses caching helpers previously in the root.
+- `utils/semantic_cache.py` retains a legacy cache implementation for future evaluation.
+- `utils/compare_models.py` contains the model comparison script.
+- `utils/model_performance.py` holds the model performance benchmarking script.
 
 ## 🔀 **EXTRACTION STRATEGY**
 

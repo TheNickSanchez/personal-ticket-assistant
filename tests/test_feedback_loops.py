@@ -17,7 +17,7 @@ class FeedbackLoopTests(unittest.TestCase):
             except FileNotFoundError:
                 pass
         self.session = SessionManager(self.session_file)
-        self.client = LLMClient(self.session)
+        self.client = LLMClient(session_manager=self.session)
         now = datetime.now()
         self.ticket = Ticket(
             key="T1",

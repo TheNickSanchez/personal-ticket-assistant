@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from assistant import Ticket, WorkAssistant, WorkloadAnalysis
-from session_manager import SessionManager
+from core.session_manager import SessionManager
 
 
 def _make_ticket(key: str) -> Ticket:
