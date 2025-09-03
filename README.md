@@ -69,7 +69,7 @@ Let me analyze your current workload...
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
 
 💬 Let's work together! What would you like to do?
-Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'refresh', 'quit'
+Commands: 'focus <ticket>', 'help <ticket>', 'list', 'comment <ticket>', 'email <ticket>', 'refresh', 'quit'
 
 What should we tackle? help SEC-2847
 
@@ -89,6 +89,7 @@ I can help you with SEC-2847 in these ways:
 - `focus <ticket>` - Get detailed analysis of a specific ticket
 - `help <ticket>` - Get AI suggestions and offers to help with actions
 - `comment <ticket>` - Draft and post a comment with AI assistance
+- `email <ticket>` - Send a status email with AI-generated content
 - `refresh` - Re-run workload analysis
 - `quit` - End your work session
 
@@ -104,6 +105,20 @@ JIRA_EMAIL=your.email@company.com
 
 # Your Jira API token (not your password!)
 JIRA_API_TOKEN=ATATT3xFfGF0...your_token_here
+```
+
+### SMTP Email Settings
+Add these to your `.env` to enable email sending:
+
+```bash
+SMTP_HOST=smtp.yourprovider.com
+SMTP_PORT=587
+SMTP_USERNAME=your.email@company.com
+SMTP_PASSWORD=your_smtp_password
+# Optional overrides
+SMTP_FROM=your.email@company.com
+SMTP_TO=recipient@company.com
+SMTP_USE_TLS=true
 ```
 
 ### AI Provider Options
