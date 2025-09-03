@@ -8,7 +8,8 @@ import os
 import time
 import json
 from pathlib import Path
-from assistant import WorkAssistant, LLMClient
+from core.work_assistant import WorkAssistant
+from core.llm_client import LLMClient
 from dotenv import load_dotenv
 
 load_dotenv()

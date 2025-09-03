@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from assistant import Ticket, WorkAssistant, WorkloadAnalysis, LLMClient
+from core.models import Ticket, WorkloadAnalysis
+from core.work_assistant import WorkAssistant
+from core.llm_client import LLMClient
 from core.session_manager import SessionManager
 
 
@@ -62,7 +64,7 @@ def test_dependency_cache(tmp_path):
     assistant._display_dependencies = MagicMock()
     assistant._interactive_session = MagicMock()
 
-    with patch("assistant.Confirm.ask", return_value=True):
+    with patch("core.work_assistant.Confirm.ask", return_value=True):
         assistant.start_session()
     llm.analyze_dependencies.assert_called_once()
     assert assistant.current_dependencies == {"T1": ["T2"]}
@@ -71,7 +73,7 @@ def test_dependency_cache(tmp_path):
     assistant._focus_on_ticket = MagicMock()
 
     llm.analyze_dependencies.reset_mock()
-    with patch("assistant.Confirm.ask", return_value=True):
+    with patch("core.work_assistant.Confirm.ask", return_value=True):
         assistant.start_session()
     llm.analyze_dependencies.assert_not_called()
     assert assistant.current_dependencies == {"T1": ["T2"]}

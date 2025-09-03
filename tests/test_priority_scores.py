@@ -8,7 +8,8 @@ import sys, os
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from assistant import LLMClient, Ticket
+from core.llm_client import LLMClient
+from core.models import Ticket
 
 
 class PriorityScoreTests(unittest.TestCase):

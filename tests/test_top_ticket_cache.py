@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-from assistant import Ticket, WorkAssistant, WorkloadAnalysis
+from core.models import Ticket, WorkloadAnalysis
+from core.work_assistant import WorkAssistant
 from core.session_manager import SessionManager
 
 
@@ -55,12 +56,12 @@ def test_cached_summary_preserves_top_ticket(tmp_path):
     assistant._interactive_session = MagicMock()
 
     # First run populates the cache
-    with patch("assistant.Confirm.ask", return_value=True):
+    with patch("core.work_assistant.Confirm.ask", return_value=True):
         assistant.start_session()
 
     # Second run should use cached analysis and not call the LLM
     llm.analyze_workload.reset_mock()
-    with patch("assistant.Confirm.ask", return_value=True):
+    with patch("core.work_assistant.Confirm.ask", return_value=True):
         assistant.start_session()
 
     llm.analyze_workload.assert_not_called()

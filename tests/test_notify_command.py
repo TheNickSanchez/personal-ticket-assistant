@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from assistant import WorkAssistant, Ticket
+from core.work_assistant import WorkAssistant
+from core.models import Ticket
 
 
 class DummySlack:
