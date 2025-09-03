@@ -20,6 +20,7 @@ import openai
 from dotenv import load_dotenv
 from cache import Cache, SemanticCache
 from session_manager import SessionManager
+from knowledge_base import KnowledgeBase
 
 # Load environment variables
 load_dotenv()
@@ -202,11 +203,12 @@ class JiraClient:
 # ==============================================================================
 
 class LLMClient:
-    def __init__(self):
+    def __init__(self, knowledge_base: Optional[KnowledgeBase] = None):
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # Cache for per-ticket suggestions
         self.cache = Cache()
         self.semantic_cache = SemanticCache()
+        self.knowledge_base = knowledge_base or KnowledgeBase()
         
 
         if self.provider == 'openai':
@@ -498,6 +500,12 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
                 if datetime.now() - ts < timedelta(hours=24):
                     return cached.get("suggestion", "")
 
+        similar = self.knowledge_base.search(ticket.summary)
+        kb_text = ""
+        if similar:
+            lines = [f"- {e['summary']}: {e['resolution']}" for e in similar[:3]]
+            kb_text = "\nSimilar past tickets:\n" + "\n".join(lines) + "\n"
+
         prompt = f"""I need help with this Jira ticket:
 
 Ticket: {ticket.key} - {ticket.summary}
@@ -509,7 +517,7 @@ Labels: {ticket.labels}
 Description: {ticket.description}
 
 Context: {context}
-
+{kb_text}
 As my work assistant, suggest the most logical next step to move this ticket forward.
 Be specific and actionable. If there are files to download, configs to check, or people to contact, mention them.
 Offer concrete help with execution.
@@ -535,6 +543,9 @@ Keep response conversational and focused on getting this done."""
         except Exception:
             suggestion = self._generate_fallback_suggestion(ticket)
 
+        if similar:
+            past = "\n" + kb_text.strip() if kb_text else ""
+            suggestion = f"{past}\n{suggestion}".strip()
         self.cache.set(cache_key, {"timestamp": datetime.now().isoformat(), "suggestion": suggestion})
         return suggestion
     
