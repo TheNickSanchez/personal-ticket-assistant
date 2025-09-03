@@ -19,6 +19,7 @@ class SessionManager:
             "tickets": [],
             "ticket_progress": {},
             "conversation_history": [],
+            "feedback": {},
             "work_patterns": {"commands": {}, "categories": {}},
             "dependencies": {},
         }
@@ -79,6 +80,18 @@ class SessionManager:
         history.append(message)
         self.save()
 
+    def add_feedback(self, ticket_key: str, context: str, feedback: str) -> None:
+        feedback_store: Dict[str, Dict[str, List[str]]] = self.data.setdefault("feedback", {})
+        ticket_fb: Dict[str, List[str]] = feedback_store.setdefault(ticket_key, {})
+        ctx_key = context.strip()
+        entries: List[str] = ticket_fb.setdefault(ctx_key, [])
+        entries.append(feedback)
+        self.save()
+
+    def get_feedback(self, ticket_key: str, context: str) -> List[str]:
+        feedback_store: Dict[str, Dict[str, List[str]]] = self.data.get("feedback", {})
+        ticket_fb: Dict[str, List[str]] = feedback_store.get(ticket_key, {})
+        return list(ticket_fb.get(context.strip(), []))
     # Work pattern logging
     def log_command(self, command: str) -> None:
         patterns = self.data.setdefault("work_patterns", {})
@@ -113,6 +126,7 @@ class SessionManager:
                 "tickets": [],
                 "ticket_progress": {},
                 "conversation_history": [],
+                "feedback": {},
                 "dependencies": {},
             }
         )
