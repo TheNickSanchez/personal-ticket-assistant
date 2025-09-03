@@ -20,6 +20,7 @@ import openai
 from dotenv import load_dotenv
 from cache import Cache, SemanticCache
 from session_manager import SessionManager
+from integrations.email_client import EmailClient
 
 # Load environment variables
 load_dotenv()
@@ -600,6 +601,8 @@ class WorkAssistant:
         self.saved_focus_key: Optional[str] = None
         # Provide a semantic cache here as well for assistant-level caching
         self.semantic_cache = SemanticCache()
+        # Email client for sending ticket updates
+        self.email_client = EmailClient()
         # Default directory for generated files
         self.output_dir = os.getenv('OUTPUT_DIR', 'output')
 
@@ -842,7 +845,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'email <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
@@ -938,6 +941,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if input_lower.startswith('comment ') or input_lower.startswith('update '):
             ticket_key = user_input[8:].strip()
             self._help_with_comment(ticket_key)
+            return False
+
+        if input_lower.startswith('email '):
+            ticket_key = user_input[6:].strip()
+            self._email_ticket(ticket_key)
             return False
 
         if input_lower in ['re analyze', 'reanalyze', 're-analyze']:
@@ -1202,6 +1210,26 @@ Focus on progress, next steps, or findings based on the context provided."""
                 console.print("✅ Comment posted successfully!", style="green")
             else:
                 console.print("❌ Failed to post comment", style="red")
+
+    def _email_ticket(self, ticket_key: str):
+        """Generate and send an email update about a ticket."""
+        ticket = self._find_ticket(ticket_key)
+        if not ticket:
+            console.print(f"❌ Couldn't find ticket '{ticket_key}'", style="red")
+            return
+
+        console.print(f"\n✉️ Drafting email for {ticket.key}...")
+        subject = f"Update on {ticket.key}: {ticket.summary}"
+        with console.status("[bold green]Generating email content..."):
+            body = self.llm.suggest_action(
+                ticket,
+                "Write a concise status email to stakeholders about this ticket"
+            )
+        try:
+            self.email_client.send_email(subject, body)
+            console.print("✅ Email sent!", style="green")
+        except Exception as e:
+            console.print(f"❌ Failed to send email: {e}", style="red")
     
     def _offer_actions(self, ticket: Ticket):
         """Offer specific actions for a ticket"""
@@ -1274,6 +1302,7 @@ Basic Commands:
 • focus <ticket-key> - Get detailed analysis of a specific ticket
 • help <ticket-key> - Get AI assistance and action suggestions
 • comment <ticket-key> - Draft and post a comment with AI help
+• email <ticket-key> - Send an email update with AI-generated content
 • refresh - Re-run workload analysis
 • open <ticket-key> - Print the Jira URL to open in browser
 • health - Run environment and connectivity checks
