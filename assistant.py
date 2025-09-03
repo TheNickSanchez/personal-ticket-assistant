@@ -17,10 +17,10 @@ from rich.prompt import Prompt, Confirm
 from rich.markdown import Markdown
 import openai
 from dotenv import load_dotenv
-from cache import Cache, SemanticCache
-from session_manager import SessionManager
+from utils.cache import Cache, SemanticCache
+from core.session_manager import SessionManager
 from integrations.calendar_client import CalendarClient, CalendarEvent
-from knowledge_base import KnowledgeBase
+from core.knowledge_base import KnowledgeBase
 from integrations.email_client import EmailClient
 from integrations.slack_client import SlackClient
 from integrations.github_client import GitHubClient
@@ -213,7 +213,6 @@ class LLMClient:
         self.cache = Cache()
         self.semantic_cache = SemanticCache()
         self.knowledge_base = knowledge_base or KnowledgeBase()
-        self.session = session_manager
         self.work_patterns: Dict[str, Dict[str, int]] = {}
         if self.session:
             self.work_patterns = self.session.get_work_patterns()
@@ -239,7 +238,7 @@ class LLMClient:
         self._cache_time = None
         self.analysis_cache.clear()
 
-    def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
+    def analyze_workload(self, tickets: List[Ticket], events: Optional[List[Any]] = None) -> WorkloadAnalysis:
         """Return cached workload analysis when valid."""
 
         if self.session:
@@ -817,7 +816,7 @@ class WorkAssistant:
             )
         else:
             with console.status("[bold green]Analyzing priorities..."):
-                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
             # Store in both caches
             cache_payload = {
                 "summary": self.current_analysis.summary,
@@ -945,7 +944,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         self.upcoming_events = self.calendar.get_upcoming_events()
 
         with console.status("[bold green]Analyzing priorities..."):
-            self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+            self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
 
         self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets, self.upcoming_events)
         try:
@@ -1080,7 +1079,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             console.print("🔁 Re-analyzing your workload...")
             self.llm.clear_cache()
             with console.status("[bold green]Analyzing priorities..."):
-                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
             self._display_analysis()
             return False
         # Numeric shortcut: 4 = choose a ticket by key (prompt)

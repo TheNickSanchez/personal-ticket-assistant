@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from assistant import WorkAssistant
-from session_manager import SessionManager
+from core.session_manager import SessionManager
 
 
 def test_create_file_writes_content(tmp_path):
