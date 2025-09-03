@@ -13,7 +13,6 @@ from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
 from rich.prompt import Prompt, Confirm
 from rich.markdown import Markdown
 import openai
@@ -207,8 +206,7 @@ class JiraClient:
 # ==============================================================================
 
 class LLMClient:
-    def __init__(self, knowledge_base: Optional[KnowledgeBase] = None):
-    def __init__(self, session_manager: Optional[SessionManager] = None):
+    def __init__(self, knowledge_base: Optional[KnowledgeBase] = None, session_manager: Optional[SessionManager] = None):
         self.session = session_manager or SessionManager()
         self.provider = os.getenv('LLM_PROVIDER', 'openai')
         # Cache for per-ticket suggestions
@@ -241,7 +239,7 @@ class LLMClient:
         self._cache_time = None
         self.analysis_cache.clear()
 
-    def analyze_workload(self, tickets: List[Ticket], events: Optional[List[CalendarEvent]] = None) -> WorkloadAnalysis:
+    def analyze_workload(self, tickets: List[Ticket]) -> WorkloadAnalysis:
         """Return cached workload analysis when valid."""
 
         if self.session:
@@ -258,14 +256,11 @@ class LLMClient:
         ):
             return self._analysis_cache
 
-        analysis = self._compute_analysis(tickets, events)
         analysis = self._compute_analysis(tickets, self.work_patterns)
         self._analysis_cache = analysis
         self._cache_time = datetime.now()
         return analysis
 
-    def _compute_analysis(self, tickets: List[Ticket], events: Optional[List[CalendarEvent]] = None) -> WorkloadAnalysis:
-    def _compute_analysis(self, tickets: List[Ticket], patterns: Optional[Dict[str, Dict[str, int]]] = None) -> WorkloadAnalysis:
     def analyze_dependencies(self, tickets: List[Ticket]) -> Dict[str, List[str]]:
         """Detect simple ticket dependencies based on cross-references."""
 
@@ -283,7 +278,7 @@ class LLMClient:
                 dependencies[ticket.key] = deps
         return dependencies
 
-    def _compute_analysis(self, tickets: List[Ticket]) -> WorkloadAnalysis:
+    def _compute_analysis(self, tickets: List[Ticket], patterns: Optional[Dict[str, Dict[str, int]]] = None) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
         
         # Prepare ticket data for analysis
@@ -303,12 +298,6 @@ class LLMClient:
             })
         
         event_summaries = []
-        for ev in events or []:
-            event_summaries.append({
-                'summary': ev.summary,
-                'start': ev.start.isoformat(),
-                'end': ev.end.isoformat(),
-            })
 
         sorted_tickets = sorted(ticket_summaries, key=lambda t: t['key'])
         state_hash_source = json.dumps({'tickets': sorted_tickets, 'events': event_summaries}, sort_keys=True, default=str)
@@ -492,28 +481,6 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
 
             return (priority_score + keyword_boost, -ticket.stale_days, -ticket.age_days)
         
-        p0_tickets = [t for t in tickets if t.priority.strip().upper().startswith("P0")]
-        p1_tickets = [t for t in tickets if t.priority.strip().upper().startswith("P1")]
-        if p0_tickets:
-            top = sorted(p0_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
-            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-        elif p1_tickets:
-            top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
-        sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-        top = sorted_tickets[0]
-        p0_tickets = [t for t in tickets if (t.priority or "").strip().upper().startswith("P0")]
-        if p0_tickets:
-
-            sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-            top = sorted(p0_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
-        else:
-            p1_tickets = [t for t in tickets if (t.priority or "").strip().upper().startswith("P1")]
-            if p1_tickets:
-                sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-                top = sorted(p1_tickets, key=lambda t: (-t.stale_days, -t.age_days))[0]
-            else:
-                sorted_tickets = sorted(tickets, key=ticket_urgency_score)
-                top = sorted_tickets[0]
         sorted_tickets = sorted(tickets, key=ticket_urgency_score)
         top = sorted_tickets[0]
 
@@ -584,11 +551,11 @@ Description: {ticket.description}
 
 Context: {context}
 
-"""
 {kb_text}
+
 As my work assistant, suggest the most logical next step to move this ticket forward.
 Be specific and actionable. If there are files to download, configs to check, or people to contact, mention them.
-Offer concrete help with execution.
+Offer concrete help with execution."""
 
         if related_tickets:
             prompt += "Recently discussed tickets:\n"
@@ -690,19 +657,17 @@ Offer concrete help with execution.
 # ==============================================================================
 
 class WorkAssistant:
-    def __init__(self, jira_client: Optional[JiraClient] = None, llm_client: Optional[LLMClient] = None, session_manager: Optional[SessionManager] = None, calendar_client: Optional[CalendarClient] = None):
     def __init__(
         self,
         jira_client: Optional[JiraClient] = None,
         llm_client: Optional[LLMClient] = None,
         session_manager: Optional[SessionManager] = None,
+        calendar_client: Optional[CalendarClient] = None,
         slack_client: Optional[SlackClient] = None,
     ):
         self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
-        self.llm = llm_client or LLMClient(self.session)
         self.llm = llm_client or LLMClient(session_manager=self.session)
-        self.llm = llm_client or LLMClient()
         self.calendar = calendar_client or CalendarClient()
         self.slack = slack_client
         self.current_tickets: List[Ticket] = []
@@ -852,7 +817,7 @@ class WorkAssistant:
             )
         else:
             with console.status("[bold green]Analyzing priorities..."):
-                self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
             # Store in both caches
             cache_payload = {
                 "summary": self.current_analysis.summary,
@@ -902,8 +867,7 @@ class WorkAssistant:
         analysis = self.current_analysis
         
         # Clean up the analysis text (remove any debug tags)
-        clean_summary = re.sub(r'<think>.*?</think>', '', analysis.summary, flags=re.DOTALL)
-        clean_summary = clean_summary.strip()
+        clean_summary = self._clean_ai_response(analysis.summary)
         
         # Main analysis panel
         console.print(Panel(
@@ -981,7 +945,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         self.upcoming_events = self.calendar.get_upcoming_events()
 
         with console.status("[bold green]Analyzing priorities..."):
-            self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
+            self.current_analysis = self.llm.analyze_workload(self.current_tickets)
 
         self.current_ticket_hash = self._calculate_ticket_hash(self.current_tickets, self.upcoming_events)
         try:
@@ -1000,10 +964,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'check', 'health', 'rescan', 'quit'")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'plan <goal>', 'write <filename>', 'check', 'rescan', 'quit'")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'email <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'github-pr <ticket>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'email <ticket>', 'notify <ticket>', 'link <ticket>', 'plan <goal>', 'write <filename>', 'github-pr <ticket>', 'check', 'health', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
@@ -1116,7 +1077,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
             console.print("🔁 Re-analyzing your workload...")
             self.llm.clear_cache()
             with console.status("[bold green]Analyzing priorities..."):
-                self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
+                self.current_analysis = self.llm.analyze_workload(self.current_tickets)
             self._display_analysis()
             return False
         # Numeric shortcut: 4 = choose a ticket by key (prompt)
@@ -1141,10 +1102,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if input_lower == 'check':
             self._schedule_check()
             return False
-        if input_lower == 'health':
         if input_lower.startswith('plan'):
             goal = user_input[5:].strip()
             self._planning_workflow(goal)
+            return False
+            
         if input_lower.startswith('github-pr '):
             ticket_key = user_input[10:].strip()
             self._create_github_pr(ticket_key)
@@ -1288,6 +1250,23 @@ Why it's urgent: {analysis.priority_reasoning}"""
         except Exception as e:
             console.print(f"⚠️ Jira connectivity check failed: {e}", style="yellow")
 
+    def _clean_ai_response(self, response: str) -> str:
+        """Clean AI response by removing debug tags and extra whitespace"""
+        if not response:
+            return ""
+        
+        # Remove various debug tags and their content
+        cleaned = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = re.sub(r'<debug>.*?</debug>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = re.sub(r'<reasoning>.*?</reasoning>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Remove extra whitespace and empty lines
+        lines = [line.strip() for line in cleaned.split('\n')]
+        lines = [line for line in lines if line]  # Remove empty lines
+        cleaned = '\n'.join(lines)
+        
+        return cleaned.strip()
+    
     def _sanitize_filename(self, name: str) -> str:
         """Sanitize a filename by stripping directories and invalid characters."""
         base = os.path.basename(name)
@@ -1370,14 +1349,26 @@ Why it's urgent: {analysis.priority_reasoning}"""
         if any(word in input_lower for word in ['research', 'investigate']):
             console.print(f"🔍 Let me research {ticket.key} for you...")
             suggestion = self.llm.suggest_action(ticket, "Research this issue deeply and provide technical insights")
-            console.print(Panel(suggestion, title="🔬 Research Results", border_style="blue"))
+            clean_suggestion = self._clean_ai_response(suggestion)
+            console.print(Panel(
+                Markdown(clean_suggestion), 
+                title="🔬 Research Results", 
+                title_align="left",
+                border_style="blue"
+            ))
             self._prompt_feedback(ticket, "Research this issue deeply and provide technical insights")
             return False
 
         if any(word in input_lower for word in ['plan', 'steps', 'action']):
             console.print(f"📋 Creating action plan for {ticket.key}...")
             plan = self.llm.suggest_action(ticket, "Create a detailed step-by-step action plan")
-            console.print(Panel(plan, title="📋 Action Plan", border_style="green"))
+            clean_plan = self._clean_ai_response(plan)
+            console.print(Panel(
+                Markdown(clean_plan), 
+                title="📋 Action Plan", 
+                title_align="left",
+                border_style="green"
+            ))
             self._prompt_feedback(ticket, "Create a detailed step-by-step action plan")
             return False
         
@@ -1422,10 +1413,14 @@ Description:
         # Get AI suggestions
         with console.status("[bold green]Getting AI suggestions..."):
             suggestion = self.llm.suggest_action(ticket, related_tickets=related)
-            suggestion = self.llm.suggest_action(ticket)
 
-
-        console.print(Panel(suggestion, title="🤖 AI Suggestion", border_style="green"))
+        clean_suggestion = self._clean_ai_response(suggestion)
+        console.print(Panel(
+            Markdown(clean_suggestion), 
+            title="🤖 AI Suggestion", 
+            title_align="left",
+            border_style="green"
+        ))
         self._prompt_feedback(ticket, "")
         
         # Ask for next action
@@ -1446,7 +1441,16 @@ Description:
         with console.status("[bold green]Analyzing ticket and generating help..."):
             suggestion = self.llm.suggest_action(ticket, "The user specifically asked for help with this ticket")
 
-        console.print(Panel(suggestion, title=f"🤖 How to tackle {ticket.key}", border_style="green"))
+        # Clean and format the suggestion like "Your Work Analysis"
+        clean_suggestion = self._clean_ai_response(suggestion)
+        
+        # Display using Markdown formatting like the analysis
+        console.print(Panel(
+            Markdown(clean_suggestion),
+            title=f"🤖 How to tackle {ticket.key}",
+            title_align="left",
+            border_style="green"
+        ))
         self._prompt_feedback(ticket, "The user specifically asked for help with this ticket")
         
         # Ask if they want to take action
@@ -1535,12 +1539,24 @@ Focus on progress, next steps, or findings based on the context provided."""
         elif choice == "2":
             console.print("🔍 Let me research this issue...")
             research = self.llm.suggest_action(ticket, "Research this issue deeply and provide technical insights")
-            console.print(Panel(research, title="🔬 Research Results", border_style="blue"))
+            clean_research = self._clean_ai_response(research)
+            console.print(Panel(
+                Markdown(clean_research), 
+                title="🔬 Research Results", 
+                title_align="left",
+                border_style="blue"
+            ))
             self._prompt_feedback(ticket, "Research this issue deeply and provide technical insights")
         elif choice == "3":
             console.print("📋 Creating action plan...")
             plan = self.llm.suggest_action(ticket, "Create a detailed step-by-step action plan to resolve this ticket")
-            console.print(Panel(plan, title="📋 Action Plan", border_style="green"))
+            clean_plan = self._clean_ai_response(plan)
+            console.print(Panel(
+                Markdown(clean_plan), 
+                title="📋 Action Plan", 
+                title_align="left",
+                border_style="green"
+            ))
             self._prompt_feedback(ticket, "Create a detailed step-by-step action plan to resolve this ticket")
         else:
             console.print("👍 No problem! Let me know if you need help with anything else.")
