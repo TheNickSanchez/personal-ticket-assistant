@@ -4,6 +4,8 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from knowledge_base import KnowledgeBase
+
 
 class SessionManager:
     """Manage persisted session data: last scan, current focus, notes, history.
@@ -11,7 +13,9 @@ class SessionManager:
     Stores a single JSON file next to the project root by default.
     """
 
-    def __init__(self, path: str = "session_state.json") -> None:
+    def __init__(
+        self, path: str = "session_state.json", knowledge_base_path: str = "knowledge_base.json"
+    ) -> None:
         self.path = path
         self.data: Dict[str, Any] = {
             "last_scan": None,
@@ -20,6 +24,7 @@ class SessionManager:
             "ticket_progress": {},
             "conversation_history": [],
         }
+        self.kb = KnowledgeBase(knowledge_base_path)
         self.load()
 
     # Basic file IO
@@ -97,9 +102,21 @@ class SessionManager:
         return data
 
     def update_session(self, tickets: List[Any]) -> None:
+        previous = {t.get("key"): t for t in self.data.get("tickets", []) if isinstance(t, dict)}
+        for ticket in tickets:
+            key = getattr(ticket, "key", None)
+            status = getattr(ticket, "status", None)
+            prev_status = previous.get(key, {}).get("status") if key else None
+            if key and status == "Done" and prev_status != "Done":
+                self.record_resolution(ticket)
         self.data["tickets"] = [self._serialize_ticket(t) for t in tickets]
         self.set_last_scan()
         self.save()
+
+    def record_resolution(self, ticket: Any) -> None:
+        summary = getattr(ticket, "summary", "")
+        resolution = getattr(ticket, "resolution", "") or getattr(ticket, "description", "")
+        self.kb.add(getattr(ticket, "key", ""), summary, resolution)
 
     def needs_rescan(self) -> bool:
         last = self.last_scan
