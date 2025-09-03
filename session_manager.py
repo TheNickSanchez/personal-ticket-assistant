@@ -19,6 +19,7 @@ class SessionManager:
             "tickets": [],
             "ticket_progress": {},
             "conversation_history": [],
+            "recent_tickets": [],
         }
         self.load()
 
@@ -75,6 +76,26 @@ class SessionManager:
         history.append(message)
         self.save()
 
+    # Recently focused ticket tracking
+    def record_ticket(self, ticket: Any) -> None:
+        """Store a lightweight summary of a ticket that was recently discussed."""
+        recent: List[Dict[str, str]] = self.data.setdefault("recent_tickets", [])
+        summary = {
+            "key": getattr(ticket, "key", ""),
+            "summary": getattr(ticket, "summary", ""),
+        }
+        recent.append(summary)
+        # Keep only the last 5 entries
+        self.data["recent_tickets"] = recent[-5:]
+        self.save()
+
+    def get_recent_ticket_summaries(self, exclude: Optional[str] = None, limit: int = 3) -> List[Dict[str, str]]:
+        """Return summaries of recently discussed tickets, excluding the provided key."""
+        recent: List[Dict[str, str]] = list(self.data.get("recent_tickets", []))
+        if exclude:
+            recent = [t for t in recent if t.get("key") != exclude]
+        return recent[-limit:]
+
     def reset(self) -> None:
         self.data.update(
             {
@@ -83,6 +104,7 @@ class SessionManager:
                 "tickets": [],
                 "ticket_progress": {},
                 "conversation_history": [],
+                "recent_tickets": [],
             }
         )
         self.save()
