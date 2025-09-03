@@ -20,6 +20,7 @@ import openai
 from dotenv import load_dotenv
 from cache import Cache, SemanticCache
 from session_manager import SessionManager
+from integrations.github_client import GitHubClient
 
 # Load environment variables
 load_dotenv()
@@ -887,7 +888,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'github-pr <ticket>', 'check', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
@@ -1010,6 +1011,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
             self._create_file(filename)
             return False
 
+        if input_lower.startswith('github-pr '):
+            ticket_key = user_input[10:].strip()
+            self._create_github_pr(ticket_key)
+            return False
+
         # Health check
         if input_lower in ['health','check']:
             self._health_check()
@@ -1116,6 +1122,27 @@ Why it's urgent: {analysis.priority_reasoning}"""
         file_path.write_text(content)
         console.print(f"💾 Created file: {file_path}")
         return file_path
+
+    def _create_github_pr(self, ticket_key: str):
+        """Create a GitHub branch, commit, and PR for a ticket."""
+        if not ticket_key:
+            console.print("❌ Please provide a ticket key.", style="red")
+            return
+        token = os.getenv("GITHUB_TOKEN")
+        repo = os.getenv("GITHUB_REPO")
+        if not token or not repo:
+            console.print("❌ Missing GITHUB_TOKEN or GITHUB_REPO in environment.", style="red")
+            return
+        client = GitHubClient(token, repo)
+        branch = ticket_key.replace(" ", "-")
+        filename = self._sanitize_filename(f"{ticket_key}.txt")
+        try:
+            client.create_branch(branch)
+            client.create_commit(branch, filename, f"Auto-generated file for {ticket_key}", f"chore: add {ticket_key}")
+            pr = client.create_pull_request(branch, f"{ticket_key} work", f"Auto-generated PR for {ticket_key}")
+            console.print(f"✅ Created PR: {pr.get('html_url', 'N/A')}", style="green")
+        except Exception as e:
+            console.print(f"❌ Failed to create PR: {e}", style="red")
     
     def _handle_contextual_input(self, input_lower: str) -> bool:
         """Handle input when we have a current focus ticket"""
@@ -1322,6 +1349,7 @@ Basic Commands:
 • refresh - Re-run workload analysis
 • open <ticket-key> - Print the Jira URL to open in browser
 • health - Run environment and connectivity checks
+• github-pr <ticket-key> - Create a GitHub branch and PR
 • quit - End the session
 
 Smart Commands:
