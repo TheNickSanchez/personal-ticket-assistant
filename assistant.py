@@ -530,9 +530,20 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
             summary=f"You have {len(tickets)} tickets. Focus on {top.key} first - {reasoning}."
         )
     
-    def suggest_action(self, ticket: Ticket, context: str = "", force_refresh: bool = False) -> str:
+    def suggest_action(
+        self,
+        ticket: Ticket,
+        context: str = "",
+        force_refresh: bool = False,
+        related_tickets: Optional[List[Dict[str, str]]] = None,
+    ) -> str:
         """Get AI suggestion for specific ticket action"""
-        cache_key = f"{ticket.key}:{context.strip()}"
+        base_key = f"{ticket.key}:{context.strip()}"
+        if related_tickets:
+            rel_key = ",".join(sorted(t["key"] for t in related_tickets))
+            cache_key = f"{base_key}:{rel_key}"
+        else:
+            cache_key = base_key
         if not force_refresh:
             cached = self.cache.get(cache_key)
             if cached:
@@ -557,12 +568,25 @@ Labels: {ticket.labels}
 Description: {ticket.description}
 
 Context: {context}
+
+"""
 {kb_text}
 As my work assistant, suggest the most logical next step to move this ticket forward.
 Be specific and actionable. If there are files to download, configs to check, or people to contact, mention them.
 Offer concrete help with execution.
 
-Keep response conversational and focused on getting this done."""
+        if related_tickets:
+            prompt += "Recently discussed tickets:\n"
+            for rt in related_tickets:
+                prompt += f"- {rt['key']}: {rt['summary']}\n"
+            prompt += "\nUse these for context and reference if helpful.\n"
+
+        prompt += (
+            "As my work assistant, suggest the most logical next step to move this ticket forward.\n"
+            "Be specific and actionable. If there are files to download, configs to check, or people to contact, mention them.\n"
+            "Offer concrete help with execution.\n\n"
+            "Keep response conversational and focused on getting this done."
+        )
 
         past_feedback = self.session.get_feedback(ticket.key, context)
         if past_feedback:
@@ -1304,7 +1328,10 @@ Why it's urgent: {analysis.priority_reasoning}"""
         self.session.set_current_focus(ticket.key)
         self.save_state()
         console.print(f"\n🔍 Focusing on {ticket.key}...")
-        
+
+        related = self.session.get_recent_ticket_summaries(exclude=ticket.key)
+        self.session.record_ticket(ticket)
+
         # Show ticket details with proper description formatting
         details = f"""Summary: {ticket.summary}
 Priority: {ticket.priority} | Status: {ticket.status}
@@ -1315,12 +1342,18 @@ Labels: {', '.join(ticket.labels) if ticket.labels else 'None'}
 
 Description:
 {ticket.description[:500] + '...' if len(ticket.description) > 500 else ticket.description}"""
-        
+
         console.print(Panel(details.strip(), title=f"📋 {ticket.key}", border_style="blue"))
-        
+
+        if related:
+            related_lines = "\n".join(f"{t['key']}: {t['summary']}" for t in related)
+            console.print(Panel(related_lines, title="🔗 Related Tickets", border_style="magenta"))
+
         # Get AI suggestions
         with console.status("[bold green]Getting AI suggestions..."):
+            suggestion = self.llm.suggest_action(ticket, related_tickets=related)
             suggestion = self.llm.suggest_action(ticket)
+
 
         console.print(Panel(suggestion, title="🤖 AI Suggestion", border_style="green"))
         self._prompt_feedback(ticket, "")
