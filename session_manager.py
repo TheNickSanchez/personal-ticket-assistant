@@ -20,6 +20,7 @@ class SessionManager:
             "ticket_progress": {},
             "conversation_history": [],
             "work_patterns": {"commands": {}, "categories": {}},
+            "dependencies": {},
         }
         self.load()
 
@@ -97,6 +98,12 @@ class SessionManager:
             patterns = {"commands": {}, "categories": {}}
             self.data["work_patterns"] = patterns
         return patterns
+    def set_dependencies(self, deps: Dict[str, List[str]]) -> None:
+        self.data["dependencies"] = deps
+        self.save()
+
+    def get_dependencies(self) -> Dict[str, List[str]]:
+        return dict(self.data.get("dependencies", {}))
 
     def reset(self) -> None:
         self.data.update(
@@ -106,6 +113,7 @@ class SessionManager:
                 "tickets": [],
                 "ticket_progress": {},
                 "conversation_history": [],
+                "dependencies": {},
             }
         )
         self.save()
