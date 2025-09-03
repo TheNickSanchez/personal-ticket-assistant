@@ -23,6 +23,9 @@ class SessionManager:
             "tickets": [],
             "ticket_progress": {},
             "conversation_history": [],
+            "feedback": {},
+            "work_patterns": {"commands": {}, "categories": {}},
+            "dependencies": {},
         }
         self.kb = KnowledgeBase(knowledge_base_path)
         self.load()
@@ -38,6 +41,8 @@ class SessionManager:
             except Exception:
                 # Corrupt or unreadable; keep defaults
                 pass
+        # Ensure work_patterns structure always exists
+        self.data.setdefault("work_patterns", {"commands": {}, "categories": {}})
 
     def save(self) -> None:
         os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
@@ -80,6 +85,44 @@ class SessionManager:
         history.append(message)
         self.save()
 
+    def add_feedback(self, ticket_key: str, context: str, feedback: str) -> None:
+        feedback_store: Dict[str, Dict[str, List[str]]] = self.data.setdefault("feedback", {})
+        ticket_fb: Dict[str, List[str]] = feedback_store.setdefault(ticket_key, {})
+        ctx_key = context.strip()
+        entries: List[str] = ticket_fb.setdefault(ctx_key, [])
+        entries.append(feedback)
+        self.save()
+
+    def get_feedback(self, ticket_key: str, context: str) -> List[str]:
+        feedback_store: Dict[str, Dict[str, List[str]]] = self.data.get("feedback", {})
+        ticket_fb: Dict[str, List[str]] = feedback_store.get(ticket_key, {})
+        return list(ticket_fb.get(context.strip(), []))
+    # Work pattern logging
+    def log_command(self, command: str) -> None:
+        patterns = self.data.setdefault("work_patterns", {})
+        commands = patterns.setdefault("commands", {})
+        commands[command] = commands.get(command, 0) + 1
+        self.save()
+
+    def log_ticket_category(self, category: str) -> None:
+        patterns = self.data.setdefault("work_patterns", {})
+        categories = patterns.setdefault("categories", {})
+        categories[category] = categories.get(category, 0) + 1
+        self.save()
+
+    def get_work_patterns(self) -> Dict[str, Dict[str, int]]:
+        patterns = self.data.get("work_patterns")
+        if not isinstance(patterns, dict):
+            patterns = {"commands": {}, "categories": {}}
+            self.data["work_patterns"] = patterns
+        return patterns
+    def set_dependencies(self, deps: Dict[str, List[str]]) -> None:
+        self.data["dependencies"] = deps
+        self.save()
+
+    def get_dependencies(self) -> Dict[str, List[str]]:
+        return dict(self.data.get("dependencies", {}))
+
     def reset(self) -> None:
         self.data.update(
             {
@@ -88,6 +131,8 @@ class SessionManager:
                 "tickets": [],
                 "ticket_progress": {},
                 "conversation_history": [],
+                "feedback": {},
+                "dependencies": {},
             }
         )
         self.save()
