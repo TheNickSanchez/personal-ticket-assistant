@@ -9,6 +9,7 @@ import hashlib
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
+from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -558,8 +559,27 @@ Keep response conversational and focused on getting this done."""
             suggestions.append("Review the ticket details and identify the most logical next step to move this forward.")
         
         base_suggestion = " ".join(suggestions)
-        
+
         return f"{base_suggestion}\n\nI can help you:\n• Break down the task into steps\n• Draft status updates\n• Research related issues\n\nWhat would be most helpful?"
+
+    def generate_text(self, prompt: str) -> str:
+        """Generate arbitrary text from a prompt."""
+        try:
+            if self.provider == 'openai':
+                response = openai.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7
+                )
+                return response.choices[0].message.content
+            else:
+                response = requests.post(
+                    f"{self.ollama_host}/api/generate",
+                    json={"model": self.model, "prompt": prompt, "stream": False}
+                )
+                return response.json()["response"]
+        except Exception as e:
+            return f"Error generating content: {e}"
 
 # ==============================================================================
 # WORK ASSISTANT (Main Orchestrator)
@@ -580,6 +600,8 @@ class WorkAssistant:
         self.saved_focus_key: Optional[str] = None
         # Provide a semantic cache here as well for assistant-level caching
         self.semantic_cache = SemanticCache()
+        # Default directory for generated files
+        self.output_dir = os.getenv('OUTPUT_DIR', 'output')
 
     def load_state(self):
         """Load persisted session state"""
@@ -820,7 +842,7 @@ Why it's urgent: {analysis.priority_reasoning}"""
         """Handle interactive conversation with the user"""
         console.print("\n" + "="*60)
         console.print("💬 Let's work together! What would you like to do?")
-        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'check', 'rescan', 'quit'")
+        console.print("Commands: 'view <ticket>', 'advise <ticket>', 'tickets', 'update <ticket>', 'link <ticket>', 'write <filename>', 'check', 'rescan', 'quit'")
         console.print("\nQuick picks:")
         top_key = self.current_analysis.top_priority.key if (self.current_analysis and self.current_analysis.top_priority) else None
         if top_key:
@@ -938,6 +960,11 @@ Why it's urgent: {analysis.priority_reasoning}"""
             self._open_ticket(ticket_key)
             return False
 
+        if input_lower.startswith('write '):
+            filename = user_input[6:].strip()
+            self._create_file(filename)
+            return False
+
         # Health check
         if input_lower in ['health','check']:
             self._health_check()
@@ -1023,6 +1050,27 @@ Why it's urgent: {analysis.priority_reasoning}"""
                 console.print(f"⚠️ Jira API responded with status {resp.status_code}", style="yellow")
         except Exception as e:
             console.print(f"⚠️ Jira connectivity check failed: {e}", style="yellow")
+
+    def _sanitize_filename(self, name: str) -> str:
+        """Sanitize a filename by stripping directories and invalid characters."""
+        base = os.path.basename(name)
+        return re.sub(r'[^A-Za-z0-9._-]', '_', base)
+
+    def _create_file(self, filename: str):
+        """Prompt LLM for file content and write to disk."""
+        if not filename:
+            console.print("❌ Please provide a filename.", style="red")
+            return None
+        sanitized = self._sanitize_filename(filename)
+        output_dir = Path(self.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        prompt = Prompt.ask(f"What should go in {sanitized}?")
+        with console.status("[bold green]Generating file content..."):
+            content = self.llm.generate_text(prompt)
+        file_path = output_dir / sanitized
+        file_path.write_text(content)
+        console.print(f"💾 Created file: {file_path}")
+        return file_path
     
     def _handle_contextual_input(self, input_lower: str) -> bool:
         """Handle input when we have a current focus ticket"""
