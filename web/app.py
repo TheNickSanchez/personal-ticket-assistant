@@ -41,6 +41,14 @@ async def start_session():
     return assistant.start_session_web()
 
 
+@app.get("/api/ticket/{ticket_key}/url")
+async def get_ticket_url(ticket_key: str):
+    """Get the URL to view a ticket in the Jira web interface."""
+    if assistant is None:
+        raise HTTPException(status_code=503, detail="Assistant unavailable")
+    return assistant.get_ticket_url(ticket_key)
+
+
 # Serve the frontend if it has been built
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
 if frontend_dist.exists():

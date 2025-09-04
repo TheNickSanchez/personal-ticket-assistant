@@ -1039,3 +1039,7 @@ The assistant understands natural language, so you can also:
                 "summary": self.current_analysis.summary,
             },
         }
+        
+    def get_ticket_url(self, ticket_key: str) -> Dict[str, str]:
+        """Get the URL to view a ticket in the Jira web interface."""
+        return {"url": self.jira.get_ticket_url(ticket_key)}

@@ -128,6 +128,10 @@ class JiraClient:
         extract_text(adf_doc)
         return ' '.join(text_parts).strip() or "No description available"
 
+    def get_ticket_url(self, ticket_key: str) -> str:
+        """Generate a URL to view a ticket in the Jira web interface"""
+        return f"{self.base_url}/browse/{ticket_key}"
+        
     def add_comment(self, ticket_key: str, comment: str) -> bool:
         """Add a comment to a Jira ticket"""
         url = f"{self.base_url}/rest/api/3/issue/{ticket_key}/comment"
