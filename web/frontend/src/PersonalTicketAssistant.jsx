@@ -1,23 +1,14 @@
 import React, { useState, useMemo } from 'react';
-import {
-  ChevronRight,
-  AlertTriangle,
-  Clock,
-  User,
-  Calendar,
-  Search,
-  Target,
-  Brain,
-  ArrowRight,
-  CheckCircle,
-  Play
-} from 'lucide-react';
+import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play } from 'lucide-react';
 
 const PersonalTicketAssistant = () => {
   const [currentView, setCurrentView] = useState('tickets'); // tickets, analysis, work
   const [selectedTicket, setSelectedTicket] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-
+  const [isDemoMode, setIsDemoMode] = useState(true);
+  const [tickets, setTickets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  
   // Real ticket data from your CLI output
   const allTickets = [
     { key: 'CPE-3313', priority: 'P1', status: 'In Progress', age: '99d', stale: '21d', summary: '[PRD] Update Mac Netskope Client to v126' },
@@ -55,6 +46,55 @@ const PersonalTicketAssistant = () => {
     { key: 'EUSOPS-180', priority: 'P3', status: 'Backlog', age: '595d', stale: '418d', summary: 'Review Enrolled Vendors to ABM' }
   ];
 
+  // Fetch real data from API
+  const fetchRealData = async () => {
+    setLoading(true);
+    try {
+      const response = await fetch('http://localhost:8000/api/session/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setTickets(data.tickets || []);
+      } else {
+        console.error('API call failed:', response.status);
+        // Fallback to mock data if API fails
+        setTickets(allTickets);
+      }
+    } catch (error) {
+      console.error('Error fetching real data:', error);
+      // Fallback to mock data if API fails
+      setTickets(allTickets);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Toggle between demo and real mode
+  const toggleDemoMode = () => {
+    setIsDemoMode(!isDemoMode);
+    if (isDemoMode) {
+      // Switching to real mode - fetch data
+      fetchRealData();
+    } else {
+      // Switching to demo mode - use mock data
+      setTickets(allTickets);
+    }
+  };
+
+  // Initialize with appropriate data
+  React.useEffect(() => {
+    if (isDemoMode) {
+      setTickets(allTickets);
+    } else {
+      fetchRealData();
+    }
+  }, []);
+
+  // Use tickets state instead of allTickets
+  const currentTickets = tickets.length > 0 ? tickets : allTickets;
+
   // AI Analysis data (from your CLI output)
   const aiAnalysis = {
     topPriority: 'CPE-3117',
@@ -62,7 +102,7 @@ const PersonalTicketAssistant = () => {
     urgency: `This ticket affects customers directly, as they're experiencing failed auto-locking on their Macs. It's a critical issue that requires immediate attention to prevent data loss or other consequences.`,
     nextSteps: [
       'Reach out to the snow integration team to investigate the cause of the failure',
-      'Review the Jamf script logs to identify any errors or inconsistencies',
+      'Review the Jamf script logs to identify any errors or inconsistencies', 
       'Develop a plan to implement additional security measures and change tracking for scripts in Jamf'
     ],
     howICanHelp: [
@@ -72,17 +112,17 @@ const PersonalTicketAssistant = () => {
     ],
     otherNotable: [
       { key: 'CPE-3118', note: 'Make LAPS Passwords for GCS Admin Easier for Technicians: This ticket is related to improving the ease of use for technicians when retrieving and entering the LAPS password.' },
-      { key: 'CPE-2925', note: "PRD - Enhancing Security and Change Management for Jamf: This epic review is essential for ensuring Jamf's security measures are robust enough to prevent issues like the one we're currently addressing." }
+      { key: 'CPE-2925', note: 'PRD - Enhancing Security and Change Management for Jamf: This epic review is essential for ensuring Jamf\'s security measures are robust enough to prevent issues like the one we\'re currently addressing.' }
     ]
   };
 
   const filteredTickets = useMemo(() => {
-    if (!searchQuery) return allTickets;
-    return allTickets.filter(t =>
+    if (!searchQuery) return currentTickets;
+    return currentTickets.filter(t => 
       t.key.toLowerCase().includes(searchQuery.toLowerCase()) ||
       t.summary.toLowerCase().includes(searchQuery.toLowerCase())
     );
-  }, [searchQuery, allTickets]);
+  }, [searchQuery, currentTickets]);
 
   const getPriorityColor = (priority) => {
     switch(priority) {
@@ -117,9 +157,16 @@ const PersonalTicketAssistant = () => {
           <p className="text-slate-400">{filteredTickets.length} tickets in your queue</p>
         </div>
         <div className="flex gap-3">
-          <button
+          {loading && (
+            <div className="flex items-center gap-2 px-4 py-2 text-slate-400">
+              <div className="w-4 h-4 border-2 border-slate-600 border-t-slate-400 rounded-full animate-spin"></div>
+              Loading tickets...
+            </div>
+          )}
+          <button 
             onClick={() => setCurrentView('analysis')}
             className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-purple-800 transition-all"
+            disabled={loading}
           >
             <Brain className="w-4 h-4" />
             AI Priority Analysis
@@ -150,8 +197,8 @@ const PersonalTicketAssistant = () => {
         
         <div className="divide-y divide-slate-700/30">
           {filteredTickets.map(ticket => (
-            <div
-              key={ticket.key}
+            <div 
+              key={ticket.key} 
               className={`grid grid-cols-12 gap-4 p-4 hover:bg-slate-700/20 transition-colors cursor-pointer ${
                 ticket.key === aiAnalysis.topPriority ? 'bg-purple-500/5 border-l-4 border-purple-500' : ''
               }`}
@@ -181,11 +228,11 @@ const PersonalTicketAssistant = () => {
 
   const AnalysisView = () => {
     const focusTicket = allTickets.find(t => t.key === (selectedTicket || aiAnalysis.topPriority));
-
+    
     return (
       <div className="max-w-4xl mx-auto space-y-8">
         <div className="flex items-center justify-between">
-          <button
+          <button 
             onClick={() => setCurrentView('tickets')}
             className="flex items-center gap-2 text-slate-400 hover:text-slate-300"
           >
@@ -227,7 +274,7 @@ const PersonalTicketAssistant = () => {
           <div className="bg-slate-800/30 border border-slate-700/50 rounded-lg p-6">
             <h3 className="font-semibold text-slate-200 mb-3">Why it's urgent:</h3>
             <p className="text-slate-300 mb-4">{aiAnalysis.urgency}</p>
-
+            
             <h3 className="font-semibold text-slate-200 mb-3">Next concrete steps:</h3>
             <ol className="list-decimal list-inside space-y-2 text-slate-300 mb-4">
               {aiAnalysis.nextSteps.map((step, i) => (
@@ -237,14 +284,14 @@ const PersonalTicketAssistant = () => {
           </div>
 
           <div className="flex gap-4 mt-6">
-            <button
+            <button 
               onClick={() => setCurrentView('work')}
               className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-purple-800 transition-all flex items-center justify-center gap-2"
             >
               <Play className="w-4 h-4" />
               Let's work on this
             </button>
-            <button
+            <button 
               onClick={() => setCurrentView('tickets')}
               className="px-6 py-3 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors"
             >
@@ -282,12 +329,12 @@ const PersonalTicketAssistant = () => {
 
   const WorkView = () => {
     const focusTicket = allTickets.find(t => t.key === (selectedTicket || aiAnalysis.topPriority));
-
+    
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button
+            <button 
               onClick={() => setCurrentView('analysis')}
               className="flex items-center gap-2 text-slate-400 hover:text-slate-300"
             >
@@ -327,7 +374,7 @@ const PersonalTicketAssistant = () => {
                   </div>
                 </div>
               </div>
-
+              
               <button className="w-full mt-4 px-4 py-2 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-600/30 text-purple-300 rounded-lg transition-colors">
                 Start investigation
               </button>
@@ -371,15 +418,25 @@ const PersonalTicketAssistant = () => {
             <span className="font-bold text-slate-100">Personal Ticket Assistant</span>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={toggleDemoMode}
+              className={`px-3 py-1 rounded-lg text-sm border transition-colors ${
+                isDemoMode 
+                  ? 'bg-amber-600/20 text-amber-300 border-amber-600/30 hover:bg-amber-600/30' 
+                  : 'bg-green-600/20 text-green-300 border-green-600/30 hover:bg-green-600/30'
+              }`}
+            >
+              {isDemoMode ? 'Demo Mode' : 'Live Mode'}
+            </button>
             <span className="px-3 py-1 bg-purple-600/20 text-purple-300 rounded-lg text-sm border border-purple-600/30">
               Beta
             </span>
             <div className="text-slate-400 text-sm">
-              {new Date().toLocaleDateString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric'
+              {new Date().toLocaleDateString('en-US', { 
+                weekday: 'long', 
+                year: 'numeric', 
+                month: 'long', 
+                day: 'numeric' 
               })}
             </div>
           </div>

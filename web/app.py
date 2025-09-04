@@ -1,12 +1,26 @@
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from core.work_assistant import WorkAssistant
 
+# Load environment variables
+load_dotenv()
+
 
 app = FastAPI()
+
+# Add CORS middleware to allow frontend to call API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # Frontend dev server
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_headers=["*"],
+)
 
 # Initialize a single WorkAssistant instance for the application lifecycle.
 # If required credentials (e.g. Jira) are missing, continue serving the
