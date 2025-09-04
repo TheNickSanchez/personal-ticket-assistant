@@ -32,6 +32,16 @@ except Exception as exc:  # ValueError when credentials missing
     import logging
 
     logging.warning("WorkAssistant disabled: %s", exc)
+from fastapi import FastAPI
+
+from core.work_assistant import WorkAssistant
+
+
+app = FastAPI()
+
+# Initialize a single WorkAssistant instance for the application lifecycle
+assistant = WorkAssistant()
+
 
 @app.post("/api/session/start")
 async def start_session():
@@ -44,4 +54,6 @@ async def start_session():
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
+
+    return assistant.start_session_web()
 
