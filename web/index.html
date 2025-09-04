@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personal Ticket Assistant</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .container {
+            display: flex;
+            gap: 20px;
+        }
+        .panel {
+            flex: 1;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .ticket {
+            background-color: white;
+            border-radius: 6px;
+            padding: 15px;
+            margin-bottom: 15px;
+            border-left: 4px solid #3498db;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .ticket.priority {
+            border-left-color: #e74c3c;
+        }
+        .ticket-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+        .ticket-key {
+            font-weight: bold;
+            color: #3498db;
+        }
+        .ticket-priority {
+            font-weight: bold;
+            color: #e74c3c;
+        }
+        .ticket-summary {
+            font-weight: 500;
+            margin-bottom: 10px;
+        }
+        .ticket-meta {
+            font-size: 0.85em;
+            color: #7f8c8d;
+            display: flex;
+            gap: 15px;
+        }
+        button {
+            background-color: #3498db;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 20px auto;
+            display: block;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+        .loading {
+            text-align: center;
+            font-style: italic;
+            color: #7f8c8d;
+            margin: 20px 0;
+        }
+        .analysis {
+            background-color: #fff8dc;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .help-items {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        .help-items li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .help-items li:before {
+            content: '•';
+            color: #3498db;
+            font-weight: bold;
+            display: inline-block;
+            width: 1em;
+            margin-left: -1em;
+        }
+    </style>
+</head>
+<body>
+    <h1>Personal Ticket Assistant</h1>
+    
+    <button id="startSession">Start Session</button>
+    <div id="loading" class="loading" style="display: none;">Loading your tickets and analysis...</div>
+
+    <div class="container" id="dashboard" style="display: none;">
+        <div class="panel">
+            <h2>Priority Analysis</h2>
+            <div id="analysis" class="analysis"></div>
+            
+            <h3>Top Priority</h3>
+            <div id="topPriority"></div>
+            
+            <h3>What I Can Help With</h3>
+            <ul id="helpItems" class="help-items"></ul>
+        </div>
+        
+        <div class="panel">
+            <h2>Your Tickets</h2>
+            <div id="ticketsList"></div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('startSession').addEventListener('click', async () => {
+            const loadingElement = document.getElementById('loading');
+            const dashboardElement = document.getElementById('dashboard');
+            
+            loadingElement.style.display = 'block';
+            dashboardElement.style.display = 'none';
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/session/start', {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Failed to start session');
+                }
+                
+                const data = await response.json();
+                console.log('Session data:', data);
+                
+                // Update the UI with the received data
+                updateUI(data);
+                
+                loadingElement.style.display = 'none';
+                dashboardElement.style.display = 'flex';
+            } catch (error) {
+                console.error('Error:', error);
+                loadingElement.innerText = `Error: ${error.message}`;
+            }
+        });
+        
+        function updateUI(data) {
+            // Update analysis
+            const analysisElement = document.getElementById('analysis');
+            analysisElement.innerHTML = `<p>${data.analysis.summary}</p>`;
+            
+            // Update top priority ticket
+            const topPriorityElement = document.getElementById('topPriority');
+            if (data.analysis.top_priority) {
+                const ticket = data.analysis.top_priority;
+                topPriorityElement.innerHTML = `
+                    <div class="ticket priority">
+                        <div class="ticket-header">
+                            <span class="ticket-key">${ticket.key}</span>
+                            <span class="ticket-priority">${ticket.priority}</span>
+                        </div>
+                        <div class="ticket-summary">${ticket.summary}</div>
+                        <div class="ticket-meta">
+                            <span>Status: ${ticket.status}</span>
+                            <span>Type: ${ticket.issue_type}</span>
+                            <span>Updated: ${new Date(ticket.updated).toLocaleDateString()}</span>
+                        </div>
+                        <p><strong>Why it's important:</strong> ${data.analysis.priority_reasoning}</p>
+                    </div>
+                `;
+            }
+            
+            // Update help items
+            const helpItemsElement = document.getElementById('helpItems');
+            helpItemsElement.innerHTML = data.analysis.can_help_with.map(item => `<li>${item}</li>`).join('');
+            
+            // Update tickets list
+            const ticketsListElement = document.getElementById('ticketsList');
+            ticketsListElement.innerHTML = data.tickets.map(ticket => `
+                <div class="ticket">
+                    <div class="ticket-header">
+                        <span class="ticket-key">${ticket.key}</span>
+                        <span class="ticket-priority">${ticket.priority}</span>
+                    </div>
+                    <div class="ticket-summary">${ticket.summary}</div>
+                    <div class="ticket-meta">
+                        <span>Status: ${ticket.status}</span>
+                        <span>Type: ${ticket.issue_type || 'Unknown'}</span>
+                        <span>Updated: ${new Date(ticket.updated).toLocaleDateString()}</span>
+                    </div>
+                </div>
+            `).join('');
+        }
+    </script>
+</body>
+</html>
