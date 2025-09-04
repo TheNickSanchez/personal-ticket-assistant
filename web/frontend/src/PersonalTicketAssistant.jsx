@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play } from 'lucide-react';
+import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play, ExternalLink } from 'lucide-react';
 
 const PersonalTicketAssistant = () => {
   const [currentView, setCurrentView] = useState('tickets'); // tickets, analysis, work
@@ -68,6 +68,23 @@ const PersonalTicketAssistant = () => {
       setTickets(allTickets);
     } finally {
       setLoading(false);
+    }
+  };
+  
+  // Open ticket in Jira
+  const openTicketInJira = async (ticketKey, e) => {
+    e.stopPropagation(); // Prevent triggering the parent onClick
+    
+    try {
+      const response = await fetch(`http://localhost:8000/api/ticket/${ticketKey}/url`);
+      if (response.ok) {
+        const data = await response.json();
+        window.open(data.url, '_blank');
+      } else {
+        console.error('Failed to get ticket URL:', response.status);
+      }
+    } catch (error) {
+      console.error('Error fetching ticket URL:', error);
     }
   };
 
@@ -207,7 +224,16 @@ const PersonalTicketAssistant = () => {
                 setCurrentView('analysis');
               }}
             >
-              <div className="col-span-2 font-mono text-slate-300">{ticket.key}</div>
+              <div className="col-span-2 font-mono text-slate-300 flex items-center">
+                {ticket.key}
+                <button
+                  onClick={(e) => openTicketInJira(ticket.key, e)}
+                  className="ml-2 text-slate-500 hover:text-purple-400"
+                  title="Open in Jira"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </button>
+              </div>
               <div className={`col-span-1 font-semibold ${getPriorityColor(ticket.priority)}`}>{ticket.priority}</div>
               <div className={`col-span-2 ${getStatusColor(ticket.status)}`}>{ticket.status}</div>
               <div className="col-span-1 text-slate-400">{ticket.age}</div>
@@ -260,6 +286,13 @@ const PersonalTicketAssistant = () => {
                 </span>
                 <span className="text-slate-400">•</span>
                 <span className="text-slate-300">{focusTicket?.key}</span>
+                <button
+                  onClick={(e) => openTicketInJira(focusTicket?.key, e)}
+                  className="text-slate-500 hover:text-purple-400"
+                  title="Open in Jira"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                </button>
               </div>
               <h2 className="text-xl font-bold text-slate-100 mb-2">{focusTicket?.summary}</h2>
               <div className="flex items-center gap-4 text-sm text-slate-400">
@@ -347,6 +380,14 @@ const PersonalTicketAssistant = () => {
               <p className="text-slate-400 text-sm">{focusTicket?.summary}</p>
             </div>
           </div>
+          <button
+            onClick={(e) => openTicketInJira(focusTicket?.key, e)}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors"
+            title="Open in Jira"
+          >
+            <ExternalLink className="w-4 h-4" />
+            Open in Jira
+          </button>
         </div>
 
         <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
