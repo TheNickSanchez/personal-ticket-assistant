@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play } from 'lucide-react';
+import { ChevronRight, AlertTriangle, Search, Target, Brain, CheckCircle, Play } from 'lucide-react';
 
 const PersonalTicketAssistant = () => {
   const [currentView, setCurrentView] = useState('tickets'); // tickets, analysis, work
@@ -8,9 +8,11 @@ const PersonalTicketAssistant = () => {
   const [isDemoMode, setIsDemoMode] = useState(true);
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
   
   // Real ticket data from your CLI output
-  const allTickets = [
+  const mockTickets = [
     { key: 'CPE-3313', priority: 'P1', status: 'In Progress', age: '99d', stale: '21d', summary: '[PRD] Update Mac Netskope Client to v126' },
     { key: 'VMR-320', priority: 'P1', status: 'To Do', age: '1482d', stale: '1470d', summary: 'GOTS-Critical-152190: Google Chrome < 92.0.4515.131 Multiple Vulnerabilities' },
     { key: 'CPE-3360', priority: 'P2', status: 'In Progress', age: '64d', stale: '23d', summary: 'Cortex Discovery: Endpoints in the list attached ore on the older version OS' },
@@ -46,9 +48,30 @@ const PersonalTicketAssistant = () => {
     { key: 'EUSOPS-180', priority: 'P3', status: 'Backlog', age: '595d', stale: '418d', summary: 'Review Enrolled Vendors to ABM' }
   ];
 
+  const mockAnalysis = {
+    topPriority: 'CPE-3117',
+    reasoning: `Your top priority should be CPE-3117 Failure - Auto lock macs via snow integration, labeled as VOC_Feedback. This ticket has a significant customer impact, and the issue is causing devices to fail auto-locking. The current process for managing scripts within Jamf lacks robust security measures and change tracking, which poses risks for unauthorized modifications and potential vulnerabilities.`,
+    urgency: `This ticket affects customers directly, as they're experiencing failed auto-locking on their Macs. It's a critical issue that requires immediate attention to prevent data loss or other consequences.`,
+    nextSteps: [
+      'Reach out to the snow integration team to investigate the cause of the failure',
+      'Review the Jamf script logs to identify any errors or inconsistencies',
+      'Develop a plan to implement additional security measures and change tracking for scripts in Jamf'
+    ],
+    howICanHelp: [
+      'Researching the cause of the snow integration failure',
+      'Reviewing the Jamf script logs with you',
+      'Developing a solution plan with you'
+    ],
+    otherNotable: [
+      { key: 'CPE-3118', note: 'Make LAPS Passwords for GCS Admin Easier for Technicians: This ticket is related to improving the ease of use for technicians when retrieving and entering the LAPS password.' },
+      { key: 'CPE-2925', note: "PRD - Enhancing Security and Change Management for Jamf: This epic review is essential for ensuring Jamf's security measures are robust enough to prevent issues like the one we're currently addressing." }
+    ]
+  };
+
   // Fetch real data from API
   const fetchRealData = async () => {
     setLoading(true);
+    setAnalysisLoading(true);
     try {
       const response = await fetch('http://localhost:8000/api/session/start', {
         method: 'POST',
@@ -57,17 +80,33 @@ const PersonalTicketAssistant = () => {
       if (response.ok) {
         const data = await response.json();
         setTickets(data.tickets || []);
+
+        if (data.analysis) {
+          setAiAnalysis({
+            topPriority: data.analysis.top_priority?.key || null,
+            reasoning: data.analysis.priority_reasoning || '',
+            urgency: data.analysis.summary || '',
+            nextSteps: data.analysis.next_steps || [],
+            howICanHelp: data.analysis.can_help_with || [],
+            otherNotable:
+              data.analysis.other_notable?.slice(0, 2).map(t => ({
+                key: t.key,
+                note: t.summary,
+              })) || [],
+          });
+        }
       } else {
         console.error('API call failed:', response.status);
-        // Fallback to mock data if API fails
-        setTickets(allTickets);
+        setTickets(mockTickets);
+        setAiAnalysis(mockAnalysis);
       }
     } catch (error) {
       console.error('Error fetching real data:', error);
-      // Fallback to mock data if API fails
-      setTickets(allTickets);
+      setTickets(mockTickets);
+      setAiAnalysis(mockAnalysis);
     } finally {
       setLoading(false);
+      setAnalysisLoading(false);
     }
   };
 
@@ -79,42 +118,24 @@ const PersonalTicketAssistant = () => {
       fetchRealData();
     } else {
       // Switching to demo mode - use mock data
-      setTickets(allTickets);
+      setTickets(mockTickets);
+      setAiAnalysis(mockAnalysis);
+      setAnalysisLoading(false);
     }
   };
 
   // Initialize with appropriate data
   React.useEffect(() => {
     if (isDemoMode) {
-      setTickets(allTickets);
+      setTickets(mockTickets);
+      setAiAnalysis(mockAnalysis);
     } else {
       fetchRealData();
     }
   }, []);
 
-  // Use tickets state instead of allTickets
-  const currentTickets = tickets.length > 0 ? tickets : allTickets;
-
-  // AI Analysis data (from your CLI output)
-  const aiAnalysis = {
-    topPriority: 'CPE-3117',
-    reasoning: `Your top priority should be CPE-3117 Failure - Auto lock macs via snow integration, labeled as VOC_Feedback. This ticket has a significant customer impact, and the issue is causing devices to fail auto-locking. The current process for managing scripts within Jamf lacks robust security measures and change tracking, which poses risks for unauthorized modifications and potential vulnerabilities.`,
-    urgency: `This ticket affects customers directly, as they're experiencing failed auto-locking on their Macs. It's a critical issue that requires immediate attention to prevent data loss or other consequences.`,
-    nextSteps: [
-      'Reach out to the snow integration team to investigate the cause of the failure',
-      'Review the Jamf script logs to identify any errors or inconsistencies', 
-      'Develop a plan to implement additional security measures and change tracking for scripts in Jamf'
-    ],
-    howICanHelp: [
-      'Researching the cause of the snow integration failure',
-      'Reviewing the Jamf script logs with you',
-      'Developing a solution plan with you'
-    ],
-    otherNotable: [
-      { key: 'CPE-3118', note: 'Make LAPS Passwords for GCS Admin Easier for Technicians: This ticket is related to improving the ease of use for technicians when retrieving and entering the LAPS password.' },
-      { key: 'CPE-2925', note: 'PRD - Enhancing Security and Change Management for Jamf: This epic review is essential for ensuring Jamf\'s security measures are robust enough to prevent issues like the one we\'re currently addressing.' }
-    ]
-  };
+  // Use tickets state instead of mockTickets
+  const currentTickets = tickets.length > 0 ? tickets : mockTickets;
 
   const filteredTickets = useMemo(() => {
     if (!searchQuery) return currentTickets;
@@ -149,7 +170,12 @@ const PersonalTicketAssistant = () => {
     }
   };
 
-  const TicketsView = () => (
+  const TicketsView = () => {
+    const topPriorityKey = typeof aiAnalysis?.topPriority === 'string'
+      ? aiAnalysis.topPriority
+      : aiAnalysis?.topPriority?.key;
+
+    return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
@@ -197,10 +223,10 @@ const PersonalTicketAssistant = () => {
         
         <div className="divide-y divide-slate-700/30">
           {filteredTickets.map(ticket => (
-            <div 
-              key={ticket.key} 
+            <div
+              key={ticket.key}
               className={`grid grid-cols-12 gap-4 p-4 hover:bg-slate-700/20 transition-colors cursor-pointer ${
-                ticket.key === aiAnalysis.topPriority ? 'bg-purple-500/5 border-l-4 border-purple-500' : ''
+                ticket.key === topPriorityKey ? 'bg-purple-500/5 border-l-4 border-purple-500' : ''
               }`}
               onClick={() => {
                 setSelectedTicket(ticket.key);
@@ -225,10 +251,31 @@ const PersonalTicketAssistant = () => {
       </div>
     </div>
   );
+  };
 
   const AnalysisView = () => {
-    const focusTicket = allTickets.find(t => t.key === (selectedTicket || aiAnalysis.topPriority));
-    
+    const topPriorityKey = typeof aiAnalysis?.topPriority === 'string'
+      ? aiAnalysis.topPriority
+      : aiAnalysis?.topPriority?.key;
+    const focusTicket = currentTickets.find(t => t.key === (selectedTicket || topPriorityKey));
+
+    if (analysisLoading) {
+      return (
+        <div className="max-w-4xl mx-auto text-center py-8">
+          <div className="w-8 h-8 border-2 border-slate-600 border-t-slate-400 rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-slate-400">Analyzing your tickets with AI...</p>
+        </div>
+      );
+    }
+
+    if (!aiAnalysis) {
+      return (
+        <div className="max-w-4xl mx-auto text-center py-8">
+          <p className="text-slate-400">No analysis available. Switch to Live Mode to get AI insights.</p>
+        </div>
+      );
+    }
+
     return (
       <div className="max-w-4xl mx-auto space-y-8">
         <div className="flex items-center justify-between">
@@ -328,13 +375,23 @@ const PersonalTicketAssistant = () => {
   };
 
   const WorkView = () => {
-    const focusTicket = allTickets.find(t => t.key === (selectedTicket || aiAnalysis.topPriority));
-    
+    const topPriorityKey = typeof aiAnalysis?.topPriority === 'string'
+      ? aiAnalysis.topPriority
+      : aiAnalysis?.topPriority?.key;
+    const focusTicket = currentTickets.find(t => t.key === (selectedTicket || topPriorityKey));
+
+    if (!aiAnalysis || analysisLoading) {
+      return <div>Loading work analysis...</div>;
+    }
+
+    const workSteps = aiAnalysis.nextSteps || [];
+    const helpItems = aiAnalysis.howICanHelp || [];
+
     return (
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            <button 
+            <button
               onClick={() => setCurrentView('analysis')}
               className="flex items-center gap-2 text-slate-400 hover:text-slate-300"
             >
@@ -349,57 +406,27 @@ const PersonalTicketAssistant = () => {
           </div>
         </div>
 
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
-          <p className="text-amber-200">
-            <strong>Starting point:</strong> This is where you'd see the guided workflow for actually working on the ticket.
-            The analysis told you WHAT to do, now we help you DO it step by step.
-          </p>
-        </div>
-
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="lg:col-span-2 space-y-6">
             <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-              <h3 className="font-semibold text-slate-200 mb-4">First, let's understand the problem</h3>
-              <div className="space-y-3">
-                <div className="p-3 bg-slate-700/30 rounded-lg">
-                  <div className="font-semibold text-slate-300">What we know:</div>
-                  <div className="text-slate-400 text-sm mt-1">
-                    ServiceNow integration is failing to auto-lock Mac devices. Customer-reported issue with security implications.
-                  </div>
-                </div>
-                <div className="p-3 bg-slate-700/30 rounded-lg">
-                  <div className="font-semibold text-slate-300">What we need to find out:</div>
-                  <div className="text-slate-400 text-sm mt-1">
-                    Error patterns in logs, API connectivity status, affected device segments
-                  </div>
-                </div>
-              </div>
-              
-              <button className="w-full mt-4 px-4 py-2 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-600/30 text-purple-300 rounded-lg transition-colors">
-                Start investigation
-              </button>
+              <h3 className="font-semibold text-slate-200 mb-4">Next concrete steps</h3>
+              <ol className="list-decimal list-inside space-y-2 text-slate-300">
+                {workSteps.map((step, i) => (
+                  <li key={i}>{step}</li>
+                ))}
+              </ol>
             </div>
           </div>
 
           <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-            <h3 className="font-semibold text-slate-200 mb-4">Session Progress</h3>
+            <h3 className="font-semibold text-slate-200 mb-4">How I can help</h3>
             <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="w-6 h-6 border-2 border-slate-600 rounded-full"></div>
-                <span className="text-slate-400">Problem analysis</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-6 h-6 border-2 border-slate-600 rounded-full"></div>
-                <span className="text-slate-400">Log investigation</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-6 h-6 border-2 border-slate-600 rounded-full"></div>
-                <span className="text-slate-400">Fix implementation</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="w-6 h-6 border-2 border-slate-600 rounded-full"></div>
-                <span className="text-slate-400">Testing & validation</span>
-              </div>
+              {helpItems.map((help, i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <CheckCircle className="w-5 h-5 text-green-400" />
+                  <span className="text-slate-300">{help}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
