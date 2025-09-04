@@ -1,15 +1,44 @@
-import React, { useState, useMemo } from 'react';
-import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play, ExternalLink } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import ReactMarkdown from 'react-markdown';
+import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play, ExternalLink, Sparkles, RefreshCw, MessageCircle, Code } from 'lucide-react';
 
 const PersonalTicketAssistant = () => {
   const [currentView, setCurrentView] = useState('tickets'); // tickets, analysis, work
   const [selectedTicket, setSelectedTicket] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
-  const [isDemoMode, setIsDemoMode] = useState(true);
+  const searchInputRef = useRef(null);
+  const [isDemoMode, setIsDemoMode] = useState(() => {
+    // Check localStorage for saved preference, default to false (live mode)
+    const saved = localStorage.getItem('isDemoMode');
+    return saved ? JSON.parse(saved) : false;
+  });
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
+  const [workMode, setWorkMode] = useState('brainstorm'); // 'brainstorm' or 'script'
+  const [scriptContent, setScriptContent] = useState('');
+  const [chatMessages, setChatMessages] = useState([]);
+  const [inputMessage, setInputMessage] = useState('');
+  
+  // Debug: Track view changes
+  useEffect(() => {
+    console.log('Current view changed to:', currentView);
+    console.log('Current state when view changed:');
+    console.log('- tickets.length:', tickets.length);
+    console.log('- aiAnalysis exists:', !!aiAnalysis);
+    console.log('- analysisLoading:', analysisLoading);
+    console.log('- isDemoMode:', isDemoMode);
+  }, [currentView]);
+
+  // Auto-fetch data when not in demo mode
+  useEffect(() => {
+    console.log('Component mounted. isDemoMode:', isDemoMode);
+    if (!isDemoMode && tickets.length === 0) {
+      console.log('Auto-fetching real data on mount');
+      fetchRealData();
+    }
+  }, [isDemoMode]); // Only run when isDemoMode changes
   
   // Real ticket data from your CLI output
   const mockTickets = [
@@ -73,13 +102,48 @@ const PersonalTicketAssistant = () => {
     setLoading(true);
     setAnalysisLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/api/session/start', {
+      console.log('Fetching real data from API...');
+      const response = await fetch('http://localhost:8001/api/session/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
       if (response.ok) {
         const data = await response.json();
-        setTickets(data.tickets || []);
+        console.log('Raw API data first ticket:', data.tickets?.[0]);
+        
+        // Helper function to calculate days difference
+        const calculateDaysDiff = (dateString) => {
+          if (!dateString) return 0;
+          const date = new Date(dateString);
+          const now = new Date();
+          const diffTime = Math.abs(now - date);
+          return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        };
+        
+        // Transform tickets to include age and stale formatted like mock data
+        const transformedTickets = (data.tickets || []).map(ticket => {
+          const ageDays = calculateDaysDiff(ticket.created);
+          const staleDays = calculateDaysDiff(ticket.updated);
+          
+          const transformedTicket = {
+            key: ticket.key,
+            summary: ticket.summary,
+            priority: ticket.priority,
+            status: ticket.status,
+            age: `${ageDays}d`,
+            stale: `${staleDays}d`,
+            assignee: ticket.assignee,
+            labels: ticket.labels || [],
+            issue_type: ticket.issue_type,
+            created: ticket.created,
+            updated: ticket.updated
+          };
+          
+          return transformedTicket;
+        });
+        
+        console.log('Transformed tickets first item:', transformedTickets[0]);
+        setTickets(transformedTickets);
 
         if (data.analysis) {
           setAiAnalysis({
@@ -94,6 +158,7 @@ const PersonalTicketAssistant = () => {
                 note: t.summary,
               })) || [],
           });
+          console.log('AI Analysis set:', data.analysis);
         }
       } else {
         console.error('API call failed:', response.status);
@@ -115,7 +180,7 @@ const PersonalTicketAssistant = () => {
     e.stopPropagation(); // Prevent triggering the parent onClick
     
     try {
-      const response = await fetch(`http://localhost:8000/api/ticket/${ticketKey}/url`);
+      const response = await fetch(`http://localhost:8001/api/ticket/${ticketKey}/url`);
       if (response.ok) {
         const data = await response.json();
         window.open(data.url, '_blank');
@@ -127,10 +192,85 @@ const PersonalTicketAssistant = () => {
     }
   };
 
+  // Handle help action clicks
+  const handleHelpAction = (helpText) => {
+    // Start a chat conversation about this help item
+    setChatMessages([{
+      type: 'assistant',
+      content: `I can help you with: "${helpText}". What specific aspect would you like to explore?`
+    }]);
+    setCurrentView('work');
+    setWorkMode('brainstorm');
+  };
+
+  // Handle sending chat messages
+  const handleSendMessage = async () => {
+    if (!inputMessage.trim()) return;
+    
+    const userMessage = { type: 'user', content: inputMessage };
+    setChatMessages(prev => [...prev, userMessage]);
+    setInputMessage('');
+
+    // Simulate AI response (in real app, this would call your backend)
+    setTimeout(() => {
+      const responses = [
+        "Based on the ticket context, I suggest we start by reviewing the current Snow integration configuration. Would you like me to help you draft a script to check the integration status?",
+        "Let's break this down into steps. First, we should gather logs from the affected systems. I can help you create a log collection script.",
+        "For this type of issue, I recommend starting with a diagnostic approach. Would you like me to generate a troubleshooting checklist?"
+      ];
+      
+      const aiResponse = {
+        type: 'assistant',
+        content: responses[Math.floor(Math.random() * responses.length)]
+      };
+      setChatMessages(prev => [...prev, aiResponse]);
+    }, 1000);
+  };
+
+  // Generate sample script
+  const generateScript = () => {
+    const sampleScript = `#!/bin/bash
+# Auto-lock verification script for Snow integration
+# Generated for ticket: ${aiAnalysis?.topPriority}
+
+echo "Checking Snow integration status..."
+
+# Check if Snow service is running
+if pgrep -x "snow-service" > /dev/null; then
+    echo "✓ Snow service is running"
+else
+    echo "✗ Snow service is not running"
+    echo "Starting Snow service..."
+    sudo systemctl start snow-service
+fi
+
+# Verify auto-lock configuration
+echo "Checking auto-lock configuration..."
+if [ -f "/etc/snow/autolock.conf" ]; then
+    echo "✓ Auto-lock config found"
+    cat /etc/snow/autolock.conf
+else
+    echo "✗ Auto-lock config missing"
+    echo "Please check Snow integration setup"
+fi
+
+# Test auto-lock functionality
+echo "Testing auto-lock..."
+# Add your specific test commands here
+
+echo "Script completed. Please review the output above."`;
+    
+    setScriptContent(sampleScript);
+    setWorkMode('script');
+  };
+
   // Toggle between demo and real mode
   const toggleDemoMode = () => {
-    setIsDemoMode(!isDemoMode);
-    if (isDemoMode) {
+    const newMode = !isDemoMode;
+    setIsDemoMode(newMode);
+    localStorage.setItem('isDemoMode', JSON.stringify(newMode));
+    
+    if (newMode === false) {
       // Switching to real mode - fetch data
       fetchRealData();
     } else {
@@ -152,14 +292,33 @@ const PersonalTicketAssistant = () => {
   }, []);
 
   // Use tickets state instead of mockTickets
-  const currentTickets = tickets.length > 0 ? tickets : mockTickets;
+  const currentTickets = useMemo(() => {
+    const tickets_to_use = tickets.length > 0 ? tickets : mockTickets;
+    console.log('currentTickets computed, length:', tickets_to_use.length);
+    return tickets_to_use;
+  }, [tickets]);
 
   const filteredTickets = useMemo(() => {
-    if (!searchQuery) return currentTickets;
-    return currentTickets.filter(t => 
-      t.key.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      t.summary.toLowerCase().includes(searchQuery.toLowerCase())
-    );
+    console.log('Filtering tickets. Search query:', searchQuery);
+    console.log('Total tickets:', currentTickets.length);
+    console.log('Component render triggered - checking if search input should maintain focus');
+    
+    if (!searchQuery.trim()) {
+      console.log('No search query, returning all tickets');
+      return currentTickets;
+    }
+    const query = searchQuery.toLowerCase().trim();
+    const filtered = currentTickets.filter(t => {
+      return (
+        t.key.toLowerCase().includes(query) ||
+        t.summary.toLowerCase().includes(query) ||
+        (t.status && t.status.toLowerCase().includes(query)) ||
+        (t.priority && t.priority.toLowerCase().includes(query))
+      );
+    });
+    
+    console.log('Filtered tickets count:', filtered.length);
+    return filtered;
   }, [searchQuery, currentTickets]);
 
   const getPriorityColor = (priority) => {
@@ -187,12 +346,19 @@ const PersonalTicketAssistant = () => {
     }
   };
 
-  const TicketsView = () => (
+  const ticketCountText = useMemo(() => {
+    return `${filteredTickets.length} tickets in your queue`;
+  }, [filteredTickets.length]);
+
+  const TicketsView = React.memo(() => {
+    console.log('TicketsView rendering - searchQuery:', searchQuery, 'filteredTickets.length:', filteredTickets.length);
+    
+    return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Your Tickets</h1>
-          <p className="text-slate-400">{filteredTickets.length} tickets in your queue</p>
+          <p className="text-slate-400">{ticketCountText}</p>
         </div>
         <div className="flex gap-3">
           {loading && (
@@ -202,12 +368,32 @@ const PersonalTicketAssistant = () => {
             </div>
           )}
           <button 
-            onClick={() => setCurrentView('analysis')}
-            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-purple-800 transition-all"
-            disabled={loading}
+            onClick={() => {
+              console.log('AI Priority Analysis button clicked');
+              console.log('isDemoMode:', isDemoMode);
+              console.log('tickets.length:', tickets.length);
+              console.log('aiAnalysis exists:', !!aiAnalysis);
+              console.log('currentView before:', currentView);
+              
+              if (isDemoMode || (tickets.length > 0 && aiAnalysis)) {
+                console.log('Setting currentView to analysis immediately');
+                setCurrentView('analysis');
+              } else if (!isDemoMode) {
+                console.log('Fetching real data first, then setting analysis view');
+                fetchRealData().then(() => {
+                  console.log('Data fetched, now setting currentView to analysis');
+                  setCurrentView('analysis');
+                });
+              }
+            }}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-purple-800 transition-all disabled:opacity-50"
+            disabled={loading || analysisLoading}
           >
             <Brain className="w-4 h-4" />
             AI Priority Analysis
+            {(loading || analysisLoading) && (
+              <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin ml-1"></div>
+            )}
           </button>
         </div>
       </div>
@@ -215,11 +401,29 @@ const PersonalTicketAssistant = () => {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-slate-400" />
         <input
+          ref={searchInputRef}
+          id="ticket-search"
+          name="ticketSearch"
           type="text"
-          placeholder="Search tickets..."
-          className="w-full pl-10 pr-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-lg text-slate-300 placeholder-slate-500"
+          placeholder="Search tickets by key or summary..."
+          className="w-full pl-10 pr-4 py-3 bg-slate-800/50 border border-slate-700/50 rounded-lg text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:border-purple-500/50"
           value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          onChange={(e) => {
+            console.log('Search input changed from:', searchQuery, 'to:', e.target.value);
+            console.log('Input element id:', e.target.id, 'Input focused?', document.activeElement === e.target);
+            const newValue = e.target.value;
+            setSearchQuery(newValue);
+            
+            // Force focus back if it gets lost
+            setTimeout(() => {
+              if (searchInputRef.current && document.activeElement !== searchInputRef.current) {
+                console.log('Focus lost, restoring...');
+                searchInputRef.current.focus();
+              }
+            }, 0);
+          }}
+          onFocus={() => console.log('Search input focused')}
+          onBlur={() => console.log('Search input blurred')}
         />
       </div>
 
@@ -276,15 +480,26 @@ const PersonalTicketAssistant = () => {
         </p>
       </div>
     </div>
-  );
+    );
+  });
 
   const AnalysisView = () => {
+    console.log('AnalysisView rendering...');
+    console.log('analysisLoading:', analysisLoading);
+    console.log('aiAnalysis:', aiAnalysis);
+    console.log('currentTickets:', currentTickets.length);
+    console.log('selectedTicket:', selectedTicket);
+    
     const topPriorityKey = typeof aiAnalysis?.topPriority === 'string'
       ? aiAnalysis.topPriority
       : aiAnalysis?.topPriority?.key;
     const focusTicket = currentTickets.find(t => t.key === (selectedTicket || topPriorityKey));
 
+    console.log('topPriorityKey:', topPriorityKey);
+    console.log('focusTicket:', focusTicket);
+
     if (analysisLoading) {
+      console.log('Showing loading state');
       return (
         <div className="max-w-4xl mx-auto text-center py-8">
           <div className="w-8 h-8 border-2 border-slate-600 border-t-slate-400 rounded-full animate-spin mx-auto mb-4"></div>
@@ -294,13 +509,24 @@ const PersonalTicketAssistant = () => {
     }
 
     if (!aiAnalysis) {
+      console.log('No AI analysis available');
       return (
         <div className="max-w-4xl mx-auto text-center py-8">
           <p className="text-slate-400">No analysis available. Switch to Live Mode to get AI insights.</p>
+          <button 
+            onClick={() => {
+              console.log('Fetching data from no-analysis state');
+              fetchRealData();
+            }}
+            className="mt-4 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+          >
+            Load AI Analysis
+          </button>
         </div>
       );
     }
     
+    console.log('Rendering full analysis view');
     return (
       <div className="max-w-4xl mx-auto space-y-8">
         <div className="flex items-center justify-between">
@@ -352,12 +578,22 @@ const PersonalTicketAssistant = () => {
 
           <div className="bg-slate-800/30 border border-slate-700/50 rounded-lg p-6">
             <h3 className="font-semibold text-slate-200 mb-3">Why it's urgent:</h3>
-            <p className="text-slate-300 mb-4">{aiAnalysis.urgency}</p>
+            <div className="text-slate-300 mb-4 prose prose-invert prose-sm max-w-none">
+              <ReactMarkdown>{aiAnalysis.urgency}</ReactMarkdown>
+            </div>
             
             <h3 className="font-semibold text-slate-200 mb-3">Next concrete steps:</h3>
             <ol className="list-decimal list-inside space-y-2 text-slate-300 mb-4">
               {aiAnalysis.nextSteps.map((step, i) => (
-                <li key={i}>{step}</li>
+                <li key={i} className="prose prose-invert prose-sm max-w-none">
+                  <ReactMarkdown 
+                    components={{
+                      p: ({ children }) => <span className="inline">{children}</span>
+                    }}
+                  >
+                    {step}
+                  </ReactMarkdown>
+                </li>
               ))}
             </ol>
           </div>
@@ -367,13 +603,20 @@ const PersonalTicketAssistant = () => {
               onClick={() => setCurrentView('work')}
               className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-purple-800 transition-all flex items-center justify-center gap-2"
             >
-              <Play className="w-4 h-4" />
+              <Sparkles className="w-4 h-4" />
               Let's work on this
             </button>
             <button 
-              onClick={() => setCurrentView('tickets')}
-              className="px-6 py-3 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors"
+              onClick={() => {
+                setSelectedTicket('');
+                setCurrentView('tickets');
+                if (!isDemoMode) {
+                  fetchRealData();
+                }
+              }}
+              className="px-6 py-3 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors flex items-center gap-2"
             >
+              <RefreshCw className="w-4 h-4" />
               Pick different ticket
             </button>
           </div>
@@ -383,10 +626,14 @@ const PersonalTicketAssistant = () => {
           <h3 className="font-semibold text-slate-200 mb-4">How I can help</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {aiAnalysis.howICanHelp.map((help, i) => (
-              <div key={i} className="flex items-center gap-3 p-3 bg-slate-700/30 rounded-lg">
-                <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
-                <span className="text-slate-300">{help}</span>
-              </div>
+              <button 
+                key={i}
+                onClick={() => handleHelpAction(help)}
+                className="flex items-center gap-3 p-3 bg-slate-700/30 hover:bg-slate-600/40 rounded-lg transition-colors cursor-pointer text-left group"
+              >
+                <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0 group-hover:text-green-300" />
+                <span className="text-slate-300 group-hover:text-slate-200">{help}</span>
+              </button>
             ))}
           </div>
         </div>
@@ -417,10 +664,9 @@ const PersonalTicketAssistant = () => {
     }
 
     const workSteps = aiAnalysis.nextSteps || [];
-    const helpItems = aiAnalysis.howICanHelp || [];
 
     return (
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <button 
@@ -436,47 +682,182 @@ const PersonalTicketAssistant = () => {
               <p className="text-slate-400 text-sm">{focusTicket?.summary}</p>
             </div>
           </div>
-          <button
-            onClick={(e) => openTicketInJira(focusTicket?.key, e)}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors"
-            title="Open in Jira"
-          >
-            <ExternalLink className="w-4 h-4" />
-            Open in Jira
-          </button>
-        </div>
-
-        <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
-          <p className="text-amber-200">
-            <strong>Starting point:</strong> This is where you'd see the guided workflow for actually working on the ticket.
-            The analysis told you WHAT to do, now we help you DO it step by step.
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 space-y-6">
-            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-              <h3 className="font-semibold text-slate-200 mb-4">Next concrete steps</h3>
-              <ol className="list-decimal list-inside space-y-2 text-slate-300">
-                {workSteps.map((step, i) => (
-                  <li key={i}>{step}</li>
-                ))}
-              </ol>
+          <div className="flex gap-3">
+            <div className="flex bg-slate-800/50 border border-slate-700/50 rounded-lg p-1">
+              <button
+                onClick={() => setWorkMode('brainstorm')}
+                className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                  workMode === 'brainstorm'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-slate-400 hover:text-slate-300'
+                }`}
+              >
+                <MessageCircle className="w-4 h-4 inline mr-1" />
+                Brainstorm
+              </button>
+              <button
+                onClick={() => setWorkMode('script')}
+                className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                  workMode === 'script'
+                    ? 'bg-purple-600 text-white'
+                    : 'text-slate-400 hover:text-slate-300'
+                }`}
+              >
+                <Code className="w-4 h-4 inline mr-1" />
+                Script
+              </button>
             </div>
+            <button
+              onClick={(e) => openTicketInJira(focusTicket?.key, e)}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors"
+              title="Open in Jira"
+            >
+              <ExternalLink className="w-4 h-4" />
+              Open in Jira
+            </button>
           </div>
+        </div>
 
-          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-            <h3 className="font-semibold text-slate-200 mb-4">How I can help</h3>
-            <div className="space-y-3">
-              {helpItems.map((help, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <CheckCircle className="w-5 h-5 text-green-400" />
-                  <span className="text-slate-300">{help}</span>
+        {workMode === 'brainstorm' ? (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-6">
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-semibold text-slate-200">AI Assistant Chat</h3>
+                  <button
+                    onClick={generateScript}
+                    className="px-3 py-1 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded text-sm font-medium hover:from-purple-700 hover:to-purple-800 transition-all"
+                  >
+                    Generate Script
+                  </button>
                 </div>
-              ))}
+                
+                <div className="h-96 border border-slate-700/50 rounded-lg bg-slate-900/30 p-4 mb-4 overflow-y-auto">
+                  {chatMessages.length === 0 ? (
+                    <div className="text-slate-500 text-center py-8">
+                      <MessageCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                      <p>Start a conversation about this ticket. Ask me anything!</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {chatMessages.map((msg, i) => (
+                        <div key={i} className={`flex gap-3 ${
+                          msg.type === 'user' ? 'justify-end' : 'justify-start'
+                        }`}>
+                          <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                            msg.type === 'user'
+                              ? 'bg-purple-600 text-white'
+                              : 'bg-slate-700 text-slate-200'
+                          }`}>
+                            {msg.content}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                
+                <div className="flex gap-2">
+                  <input
+                    id="chat-input"
+                    name="chatInput"
+                    type="text"
+                    value={inputMessage}
+                    onChange={(e) => setInputMessage(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                    placeholder="Ask me about this ticket..."
+                    className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-slate-300 placeholder-slate-500"
+                  />
+                  <button
+                    onClick={handleSendMessage}
+                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-6">
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
+                <h3 className="font-semibold text-slate-200 mb-4">Next concrete steps</h3>
+                <ol className="list-decimal list-inside space-y-2 text-slate-300 text-sm">
+                  {workSteps.map((step, i) => (
+                    <li key={i}>{step}</li>
+                  ))}
+                </ol>
+              </div>
+              
+              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
+                <h3 className="font-semibold text-slate-200 mb-4">Quick Actions</h3>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => handleHelpAction("Research the cause of the snow integration failure")}
+                    className="w-full text-left px-3 py-2 bg-slate-700/30 hover:bg-slate-600/40 rounded text-sm text-slate-300 transition-colors"
+                  >
+                    🔍 Research integration failure
+                  </button>
+                  <button
+                    onClick={() => handleHelpAction("Review the Jamf script logs")}
+                    className="w-full text-left px-3 py-2 bg-slate-700/30 hover:bg-slate-600/40 rounded text-sm text-slate-300 transition-colors"
+                  >
+                    📋 Review script logs
+                  </button>
+                  <button
+                    onClick={() => handleHelpAction("Develop a solution plan")}
+                    className="w-full text-left px-3 py-2 bg-slate-700/30 hover:bg-slate-600/40 rounded text-sm text-slate-300 transition-colors"
+                  >
+                    💡 Develop solution plan
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="space-y-6">
+            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-slate-200">Generated Script</h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => navigator.clipboard.writeText(scriptContent)}
+                    className="px-3 py-1 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded text-sm text-slate-200 transition-colors"
+                  >
+                    Copy Script
+                  </button>
+                  <button
+                    onClick={generateScript}
+                    className="px-3 py-1 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded text-sm font-medium hover:from-purple-700 hover:to-purple-800 transition-all"
+                  >
+                    Regenerate
+                  </button>
+                </div>
+              </div>
+              
+              {scriptContent ? (
+                <div className="bg-slate-900/50 border border-slate-700/50 rounded-lg p-4">
+                  <pre className="text-green-400 text-sm font-mono whitespace-pre-wrap overflow-x-auto">
+                    {scriptContent}
+                  </pre>
+                </div>
+              ) : (
+                <div className="text-slate-500 text-center py-8">
+                  <Code className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>Click "Generate Script" to create a custom script for this ticket</p>
+                </div>
+              )}
+            </div>
+            
+            {scriptContent && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
+                <p className="text-amber-200">
+                  <strong>⚠️ Review before use:</strong> This script is generated based on the ticket context. 
+                  Please review and test it in a safe environment before running on production systems.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   };
