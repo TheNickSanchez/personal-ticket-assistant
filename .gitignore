@@ -46,3 +46,4 @@ node_modules/
 .cache.json
 analysis_cache.json
 session_state.json
+.venv/
