@@ -16,9 +16,9 @@ app = FastAPI()
 # Add CORS middleware to allow frontend to call API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Frontend dev server
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:5177"],  # Frontend dev server ports
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -30,17 +30,7 @@ try:
 except Exception as exc:  # ValueError when credentials missing
     assistant = None
     import logging
-
     logging.warning("WorkAssistant disabled: %s", exc)
-from fastapi import FastAPI
-
-from core.work_assistant import WorkAssistant
-
-
-app = FastAPI()
-
-# Initialize a single WorkAssistant instance for the application lifecycle
-assistant = WorkAssistant()
 
 
 @app.post("/api/session/start")
@@ -50,10 +40,8 @@ async def start_session():
         raise HTTPException(status_code=503, detail="Assistant unavailable")
     return assistant.start_session_web()
 
+
 # Serve the frontend if it has been built
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/", StaticFiles(directory=frontend_dist, html=True), name="frontend")
-
-    return assistant.start_session_web()
-
