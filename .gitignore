@@ -41,3 +41,8 @@ knowledge_base.json
 *.pytest_cache/
 # Node
 node_modules/
+
+# Specific cache and state files
+.cache.json
+analysis_cache.json
+session_state.json
