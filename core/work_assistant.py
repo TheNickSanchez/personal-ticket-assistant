@@ -5,6 +5,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from dataclasses import asdict
 
 import requests
 from rich.console import Console
@@ -1017,3 +1018,24 @@ The assistant understands natural language, so you can also:
 """
         console.print(Panel(help_text.strip(), title="❓ Help & Commands", border_style="cyan"))
 
+    def start_session_web(self) -> Dict[str, Any]:
+        """Begin a work session and return structured data for the web API."""
+        self.session.reset()
+        self.current_tickets = self.jira.get_my_tickets()
+        self.session.update_session(self.current_tickets)
+        self.current_dependencies = self.llm.analyze_dependencies(self.current_tickets)
+        self.upcoming_events = self.calendar.get_upcoming_events()
+        self.current_analysis = self.llm.analyze_workload(self.current_tickets, self.upcoming_events)
+        self.session.set_last_scan()
+
+        return {
+            "tickets": [asdict(t) for t in self.current_tickets],
+            "analysis": {
+                "top_priority": asdict(self.current_analysis.top_priority) if self.current_analysis.top_priority else None,
+                "priority_reasoning": self.current_analysis.priority_reasoning,
+                "next_steps": self.current_analysis.next_steps,
+                "can_help_with": self.current_analysis.can_help_with,
+                "other_notable": [asdict(t) for t in self.current_analysis.other_notable],
+                "summary": self.current_analysis.summary,
+            },
+        }

@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
-from rich.console import Console
+import os
 
-from core.work_assistant import WorkAssistant
-
-console = Console()
+import uvicorn
 
 
 def main() -> None:
-    """Entry point for the personal ticket assistant."""
-    try:
-        assistant = WorkAssistant()
-        assistant.start_session()
-    except KeyboardInterrupt:
-        console.print("\n👋 Session ended", style="yellow")
-    except Exception as e:
-        console.print(f"\n❌ Error: {e}", style="red")
+    """Run the web-based ticket assistant."""
+    uvicorn.run("web.app:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")))
 
 
 if __name__ == "__main__":
     main()
+
