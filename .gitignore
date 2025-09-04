@@ -47,3 +47,7 @@ node_modules/
 analysis_cache.json
 session_state.json
 .venv/
+# Runtime cache files
+.cache.json
+analysis_cache.json
+session_state.json
