@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play, ExternalLink, Sparkles, RefreshCw, Code } from 'lucide-react';
+import { API_BASE_URL } from './config';
 
 const PersonalTicketAssistant = () => {
   const [currentView, setCurrentView] = useState('tickets'); // tickets, analysis
@@ -102,14 +103,15 @@ const PersonalTicketAssistant = () => {
     setAnalysisLoading(true);
     try {
       console.log('Fetching real data from API...');
-      const response = await fetch('http://localhost:8001/api/session/start', {
+      const response = await fetch(`${API_BASE_URL}/api/session/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
+      
       if (response.ok) {
         const data = await response.json();
         console.log('Raw API data first ticket:', data.tickets?.[0]);
-        
+      
         // Helper function to calculate days difference
         const calculateDaysDiff = (dateString) => {
           if (!dateString) return 0;
@@ -179,7 +181,7 @@ const PersonalTicketAssistant = () => {
     setAnalysisLoading(true);
     try {
       console.log(`Fetching analysis for ticket: ${ticketKey}`);
-      const response = await fetch(`http://localhost:8001/api/ticket/${ticketKey}/analyze`, {
+      const response = await fetch(`${API_BASE_URL}/api/ticket/${ticketKey}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
@@ -226,6 +228,28 @@ const PersonalTicketAssistant = () => {
       }
     } catch (error) {
       console.error(`Error fetching analysis for ${ticketKey}:`, error);
+      // Fallback to basic ticket info when there's an error
+      const ticket = tickets.find(t => t.key === ticketKey);
+      if (ticket) {
+        setAiAnalysis({
+          topPriority: ticketKey,
+          reasoning: `Analysis for ${ticketKey}: ${ticket.summary}`,
+          urgency: `Priority ${ticket.priority} ticket, ${ticket.age} old, ${ticket.stale} since last update.`,
+          nextSteps: [
+            'Review ticket details and requirements',
+            'Identify blockers or dependencies',
+            'Plan next actions based on status'
+          ],
+          howICanHelp: [
+            'Research related documentation',
+            'Help break down tasks into steps',
+            'Assist with planning'
+          ],
+          context: `This ticket is part of your current workload and has been ${ticket.status} for ${ticket.stale}.`,
+          ticketSpecific: true,
+          analyzedTicket: ticket
+        });
+      }
     } finally {
       setAnalysisLoading(false);
     }
@@ -236,7 +260,7 @@ const PersonalTicketAssistant = () => {
     e.stopPropagation(); // Prevent triggering the parent onClick
     
     try {
-      const response = await fetch(`http://localhost:8001/api/ticket/${ticketKey}/url`);
+      const response = await fetch(`${API_BASE_URL}/api/ticket/${ticketKey}/url`);
       if (response.ok) {
         const data = await response.json();
         window.open(data.url, '_blank');

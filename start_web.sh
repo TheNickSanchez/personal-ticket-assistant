@@ -23,7 +23,7 @@ fi
 
 # Start the backend server in the background
 echo "Starting FastAPI backend server at http://localhost:8000"
-uvicorn web.app:app --reload &
+uvicorn web.app:app --host 127.0.0.1 --port 8000 --reload &
 BACKEND_PID=$!
 
 # Navigate to frontend directory
