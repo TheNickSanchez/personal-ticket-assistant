@@ -810,33 +810,34 @@ echo "Script completed. Please review the output above."`;
         const age = parseInt(ticket.age);
         if (age > 180) {
           score += 20;
-          reasoning = `This ${age}-day-old ticket is either completely irrelevant now or represents a massive oversight.`;
+          reasoning = `This ${age}-day-old ${ticket.priority === 'P1' ? 'security ' : ''}ticket is either completely irrelevant now or represents a massive oversight. Verify and close.`;
         }
         
         // Status + staleness
         const stale = parseInt(ticket.stale);
         if (ticket.status === 'In Progress' && stale > 21) {
           score += 30;
-          reasoning = `${ticket.status} status but stalled for ${stale} days - follow up on deployment blockers.`;
+          reasoning = `In Progress but stale for ${stale} days. This ${ticket.priority} ${ticket.priority === 'P1' ? 'security ' : ''}update shouldn't be sitting idle. Follow up on status or roadblocks.`;
         }
         
         // Priority + age mismatch
         if (ticket.priority === 'P1' && age > 30) {
           score += 40;
-          reasoning = `P1 ${ticket.priority === 'P1' && ticket.summary.includes('security') ? 'security' : ''} ticket open for ${age} days requires immediate attention.`;
+          reasoning = `${ticket.priority} ${ticket.summary.toLowerCase().includes('security') ? 'security ' : ''}ticket open for ${age} days requires immediate attention. ${age > 90 ? 'Extremely delayed resolution.' : ''}`;
         }
         
         // Special labels (simulated)
         const hasVOCLabel = ticket.key === 'CPE-3117'; // Simulate VOC label for this example
         if (hasVOCLabel) {
           score += 25;
-          reasoning = `${age} days old with VOC feedback suggests customer impact - verify if issue still exists.`;
+          reasoning = `${age} days old with VOC feedback label suggests customer impact. Before investigating, verify if the issue still exists - many integration problems resolve themselves.`;
         }
         
         return {
           ...ticket,
           priorityScore: score,
-          reasoning: reasoning || `This ticket requires routine attention based on its ${ticket.priority} priority.`
+          reasoning: reasoning || `This ticket requires routine attention based on its ${ticket.priority} priority.`,
+          hasVOCLabel: hasVOCLabel
         };
       });
       
@@ -854,126 +855,124 @@ echo "Script completed. Please review the output above."`;
             key: 'VMR-320',
             priority: 'P1',
             status: 'To Do',
-            age: '1482d',
+            age: '1484d',
             stale: '1470d',
             summary: 'GOTS-Critical-152190: Google Chrome < 92.0.4515.131 Multiple Vulnerabilities',
             priorityScore: 100,
-            reasoning: 'This 1482-day-old security ticket is either completely irrelevant now or represents a massive oversight.'
+            reasoning: 'This 1484-day-old security ticket is either completely irrelevant now or represents a massive oversight. Chrome has been updated dozens of times since 2021. Verify and close.',
+            hasVOCLabel: false
           },
           {
             key: 'CPE-3117',
-            priority: 'P2',
+            priority: 'P3',
             status: 'To Do',
-            age: '209d', 
+            age: '212d', 
             stale: '105d',
-            summary: 'Failure - Auto lock macs via snow integration',
+            summary: 'Auto lock macs via snow integration failure',
             priorityScore: 85,
-            reasoning: '209 days old with VOC feedback suggests customer impact - verify if issue still exists.'
+            reasoning: '212 days old with VOC feedback label suggests customer impact. Before investigating, verify if the auto-lock issue still exists - many integration problems resolve themselves.',
+            hasVOCLabel: true
           },
           {
             key: 'CPE-3313',
             priority: 'P1',
             status: 'In Progress',
-            age: '99d',
-            stale: '21d',
-            summary: '[PRD] Update Mac Netskope Client to v126',
+            age: '101d',
+            stale: '23d',
+            summary: 'Update Mac Netskope Client to v126',
             priorityScore: 70,
-            reasoning: 'P1 security update stalled for 21 days - follow up on deployment blockers.'
+            reasoning: "In Progress but stale for 23 days. This P1 security update shouldn't be sitting idle. Follow up on status or roadblocks.",
+            hasVOCLabel: false
           }
         ]
       : calculatePriorityTickets();
     
     return (
-      <div className="max-w-4xl mx-auto space-y-8">
-        <div className="flex items-center justify-between">
+      <div className="max-w-4xl mx-auto">
+        <div className="header mb-10 text-center">
           <button 
             onClick={() => setCurrentView('tickets')}
-            className="flex items-center gap-2 text-slate-400 hover:text-slate-300"
+            className="back-link text-slate-500 hover:text-slate-400 text-sm mb-5 flex items-center gap-1 mx-auto"
           >
             <ChevronRight className="w-4 h-4 rotate-180" />
             Back to tickets
           </button>
-        </div>
-
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-slate-100 mb-2">
+          <h1 className="text-3xl font-semibold text-slate-100 mb-2">
             Today's Priorities
           </h1>
-          <p className="text-slate-400">
+          <p className="subtitle text-slate-400">
             AI analysis of your {tickets.length} tickets based on urgency and context
           </p>
         </div>
         
         {/* Priority Tickets Section */}
-        <div className="space-y-6">
+        <div className="priority-list bg-slate-800 border border-slate-600 rounded-xl overflow-hidden">
           {priorityTickets.map((ticket, index) => (
             <div 
               key={ticket.key}
-              className={`rounded-xl p-6 ${
+              className={`priority-item p-6 relative ${index !== priorityTickets.length - 1 ? 'border-b border-slate-600' : ''} ${
                 index === 0 
-                  ? 'bg-gradient-to-r from-red-500/10 to-red-400/5 border-2 border-red-500/30 shadow-lg' 
-                  : 'bg-gradient-to-r from-slate-700/50 to-slate-600/30 border border-slate-600/50'
+                  ? 'urgent bg-gradient-to-r from-red-500/10 to-red-500/5 border-l-4 border-l-red-500 transform scale-[1.02] shadow-lg' 
+                  : 'normal bg-gradient-to-r from-slate-700/50 to-slate-600/30 border-l-4 border-l-slate-500'
               }`}
             >
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0">
-                  <div className={`w-12 h-12 ${
+              <div className={`priority-number absolute top-4 right-5 w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm ${
+                index === 0 ? 'bg-red-900/30 text-red-400' : 'bg-slate-700 text-slate-400'
+              }`}>
+                {index + 1}
+              </div>
+              
+              <div className="ticket-id font-mono text-slate-400 text-sm mb-2">
+                {ticket.key}
+              </div>
+              
+              <div className="ticket-title text-lg font-semibold text-slate-100 mb-3 pr-10">
+                {ticket.summary}
+              </div>
+              
+              <div className="reasoning text-slate-300 text-[15px] mb-4">
+                {ticket.reasoning}
+              </div>
+              
+              <div className="metadata flex gap-4 text-sm text-slate-500 mb-4">
+                <span className="flex items-center gap-1">
+                  <Clock className="w-4 h-4" />
+                  {ticket.age} old
+                </span>
+                <span className="flex items-center gap-1">
+                  <AlertTriangle className="w-4 h-4" />
+                  {ticket.priority}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Target className="w-4 h-4" />
+                  {ticket.status}
+                </span>
+                {ticket.hasVOCLabel && (
+                  <span className="flex items-center gap-1">
+                    <User className="w-4 h-4" />
+                    VOC_Feedback
+                  </span>
+                )}
+              </div>
+              
+              <div className="actions">
+                <button
+                  onClick={(e) => openTicketInJira(ticket.key, e)}
+                  className={`btn px-4 py-2 rounded-lg font-medium text-sm ${
                     index === 0 
-                      ? 'bg-red-500/20 border border-red-500/30 text-red-400' 
-                      : 'bg-slate-700/50 border border-slate-600/30 text-slate-400'
-                  } rounded-xl flex items-center justify-center font-bold text-xl`}>
-                    {index + 1}
-                  </div>
-                </div>
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <span className="font-mono text-slate-300">{ticket.key}</span>
-                    <span className="text-slate-400">•</span>
-                    <span className={`px-3 py-1 rounded-lg text-xs border ${index === 0 ? 'border-red-500/30 text-red-300' : 'border-slate-600/50 text-slate-300'}`}>
-                      {ticket.priority}
-                    </span>
-                    <span className={`px-3 py-1 rounded-lg text-xs border ${index === 0 ? 'border-red-500/30 text-red-300' : 'border-slate-600/50 text-slate-300'}`}>
-                      {ticket.status}
-                    </span>
-                  </div>
-                  <h2 className={`text-xl font-bold ${index === 0 ? 'text-white' : 'text-slate-200'} mb-3`}>
-                    {ticket.summary}
-                  </h2>
-                  <div className="mb-4 text-slate-300">
-                    {ticket.reasoning}
-                  </div>
-                  <div className="flex items-center gap-4 text-sm text-slate-400 mb-4">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-4 h-4" />
-                      <span>Age: {ticket.age}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <AlertTriangle className="w-4 h-4" />
-                      <span>Priority: {ticket.priority}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Target className="w-4 h-4" />
-                      <span>Status: {ticket.status}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={(e) => openTicketInJira(ticket.key, e)}
-                    className={`px-4 py-2 ${
-                      index === 0 
-                        ? 'bg-red-500/20 hover:bg-red-500/30 border border-red-500/30 text-red-300' 
-                        : 'bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 text-slate-300'
-                    } rounded-lg flex items-center gap-2 transition-colors`}
-                  >
-                    <ExternalLink className="w-4 h-4" />
-                    View Details
-                  </button>
-                </div>
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                      : 'bg-blue-600 hover:bg-blue-700 text-white'
+                  }`}
+                >
+                  View Details
+                </button>
               </div>
             </div>
           ))}
         </div>
         
-        <div className="flex justify-center mt-6">
+        <div className="summary bg-slate-800 border border-slate-600 rounded-xl p-5 mt-8 text-center">
+          <p className="text-slate-400 mb-4">Focus on these {priorityTickets.length} tickets today. The rest can wait or may not need immediate attention.</p>
           <button 
             onClick={() => {
               setCurrentView('tickets');
@@ -981,10 +980,9 @@ echo "Script completed. Please review the output above."`;
                 fetchRealData();
               }
             }}
-            className="px-6 py-3 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors flex items-center gap-2"
+            className="btn-back bg-slate-700 hover:bg-slate-600 border border-slate-600 text-slate-200 px-5 py-2.5 rounded-lg font-medium text-sm transition-colors"
           >
-            <RefreshCw className="w-4 h-4" />
-            Back to ticket list
+            Back to all tickets
           </button>
         </div>
       </div>
