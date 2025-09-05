@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from core.work_assistant import WorkAssistant
+from utils.scheduled_tasks import task_manager
 
 # Load environment variables
 load_dotenv()
@@ -21,6 +22,13 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+# Start background RSS processing
+try:
+    task_manager.start_rss_sync()
+except Exception as exc:
+    import logging
+    logging.warning("RSS processor disabled: %s", exc)
 
 # Initialize a single WorkAssistant instance for the application lifecycle.
 # If required credentials (e.g. Jira) are missing, continue serving the

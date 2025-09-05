@@ -15,9 +15,11 @@ from rich.prompt import Prompt, Confirm
 from rich.markdown import Markdown
 
 from utils.cache import Cache, SemanticCache
+from utils.scheduled_tasks import task_manager
 from clients.jira_client import JiraClient
 from core.llm_client import LLMClient
 from core.session_manager import SessionManager
+from core.rss_processor import JiraRSSProcessor, generate_contextual_reasoning
 from integrations.calendar_client import CalendarClient, CalendarEvent
 from integrations.email_client import EmailClient
 from integrations.slack_client import SlackClient
@@ -35,12 +37,14 @@ class WorkAssistant:
         session_manager: Optional[SessionManager] = None,
         calendar_client: Optional[CalendarClient] = None,
         slack_client: Optional[SlackClient] = None,
+        rss_processor: Optional[JiraRSSProcessor] = None,
     ):
         self.session = session_manager or SessionManager()
         self.jira = jira_client or JiraClient()
         self.llm = llm_client or LLMClient(session_manager=self.session)
         self.calendar = calendar_client or CalendarClient()
         self.slack = slack_client
+        self.rss_processor = rss_processor or task_manager.get_rss_processor()
         self.current_tickets: List[Ticket] = []
         self.current_analysis: Optional[WorkloadAnalysis] = None
         self.current_dependencies: Dict[str, List[str]] = {}

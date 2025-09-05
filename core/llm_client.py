@@ -249,10 +249,19 @@ Focus specifically on {ticket_data['key']} - do not provide general workload ana
     def _compute_analysis(self, tickets: List[Ticket], patterns: Optional[Dict[str, Dict[str, int]]] = None) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
         
+        # Get the RSS processor if available
+        from utils.scheduled_tasks import task_manager
+        rss_processor = task_manager.get_rss_processor()
+        
         # Prepare ticket data for analysis
         ticket_summaries = []
         for ticket in tickets:
-            ticket_summaries.append({
+            # Get activity data if available
+            activity_data = {}
+            if rss_processor:
+                activity_data = rss_processor.get_activity_data(ticket.key)
+                
+            ticket_data = {
                 'key': ticket.key,
                 'summary': ticket.summary,
                 'priority': ticket.priority,
@@ -263,7 +272,24 @@ Focus specifically on {ticket_data['key']} - do not provide general workload ana
                 'labels': ticket.labels,
                 'issue_type': ticket.issue_type,
                 'description': ticket.description[:300] if ticket.description else "No description"
-            })
+            }
+            
+            # Add activity data if available
+            if activity_data:
+                ticket_data.update({
+                    'last_activity_date': activity_data.get('last_activity_date', ''),
+                    'recent_comment_count': activity_data.get('recent_comment_count', 0),
+                    'days_since_activity': activity_data.get('days_since_activity', ticket.stale_days),
+                    'user_recently_active': activity_data.get('user_recently_active', False),
+                })
+                
+                # Generate activity-based reasoning
+                from core.rss_processor import generate_contextual_reasoning
+                activity_reasoning = generate_contextual_reasoning(ticket_data, activity_data)
+                if activity_reasoning:
+                    ticket_data['activity_reasoning'] = activity_reasoning
+            
+            ticket_summaries.append(ticket_data)
         
         event_summaries = []
 
@@ -398,9 +424,31 @@ Respond in a conversational tone as if talking directly to me. Focus on actionab
         if not recommended_ticket:
             recommended_ticket = tickets[0] if tickets else None
         
+        # Get activity-based reasoning if available
+        from utils.scheduled_tasks import task_manager
+        rss_processor = task_manager.get_rss_processor()
+        
+        activity_reasoning = ""
+        if rss_processor and recommended_ticket:
+            activity_data = rss_processor.get_activity_data(recommended_ticket.key)
+            if activity_data:
+                ticket_data = {
+                    'key': recommended_ticket.key,
+                    'priority': recommended_ticket.priority,
+                    'status': recommended_ticket.status,
+                    'age': recommended_ticket.age_days,
+                    'summary': recommended_ticket.summary
+                }
+                from core.rss_processor import generate_contextual_reasoning
+                activity_reasoning = generate_contextual_reasoning(ticket_data, activity_data)
+        
         # Extract reasoning (simple approach - look for "why" sections)
         reasoning_match = re.search(r'why[^.]*[.!]', analysis_text, re.IGNORECASE)
         reasoning = reasoning_match.group(0) if reasoning_match else "AI analysis suggests this needs immediate attention"
+        
+        # Use activity-based reasoning if available
+        if activity_reasoning:
+            reasoning = activity_reasoning
         
         return WorkloadAnalysis(
             top_priority=recommended_ticket,
