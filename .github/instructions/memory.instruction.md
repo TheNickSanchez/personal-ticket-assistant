@@ -5,37 +5,45 @@ applyTo: '**'
 # User Memory
 
 ## User Preferences
-- Programming languages: Python, JavaScript, React
-- Code style preferences: Modern React hooks, clean code
-- Development environment: VS Code, macOS, FastAPI + React
-- Communication style: Direct, efficient debugging
+- Programming languages: Python, JavaScript (React)
+- Code style preferences: Clean, modern React with functional components and hooks
+- Development environment: VS Code, macOS, zsh
+- Communication style: Concise with technical details
 
 ## Project Context
-- Current project type: Personal Ticket Assistant - AI-powered Jira webapp
-- Tech stack: FastAPI backend, React frontend, Ollama LLM, Jira API
-- Architecture patterns: REST API, component-based React
-- Key requirements: Real-time Jira integration, AI analysis, production-ready
+- Current project type: Personal Ticket Assistant application
+- Tech stack: 
+  - Backend: Python, FastAPI, Jira API integration, LLM integration (Ollama/OpenAI)
+  - Frontend: React, Tailwind CSS
+  - CLI UI: Rich library
+- Architecture patterns: 
+  - Service-oriented with distinct modules
+  - LLM for ticket analysis and prioritization
+- Key requirements: 
+  - Security (using environment variables for credentials)
+  - Performance (caching of analysis)
+  - User experience (clear, focused UI)
 
 ## Coding Patterns
-- React: Functional components with hooks, proper state management
-- FastAPI: Clean endpoint structure with proper error handling
-- Debugging: Console logging for UI issues, comprehensive error handling
-- Testing: Incremental testing after each change
+- Functional React components with hooks
+- Python modules with clear separation of concerns
+- Environment variable configuration for security
+- Git workflow with feature branches (dev_webapp)
 
-## Current Session Progress
-- ✅ Fixed age/stale data calculation from API dates
-- ✅ Search functionality working but has input glitch (1 letter at a time)
-- 🔄 AI Priority Analysis tab goes blank - needs logging
-- 🔄 Live mode not default - needs to set isDemoMode=false
-- 🔄 Navigation between views causes blank pages
+## Context7 Research History
+- React component styling with Tailwind CSS
+- FastAPI endpoint structuring
+- LLM integration best practices
 
-## Bug Status
-- Search Input Bug: Input field only allows one character at a time
-- AI Analysis View: Goes blank when clicked - missing view rendering
-- Demo Mode: Still defaulting to demo instead of live data
-- Navigation: View switching between tickets/analysis/work not working properly
+## Conversation History
+- Initial exploration of the codebase and understanding app structure
+- Fixed security issues with exposed API tokens in scripts
+- Implemented AI Workload Analysis Overhaul with new UI design and priority logic
+- Updated visual design based on provided HTML mockup
 
-## Environment
-- Backend: Running on port 8001 with proper PYTHONPATH
-- Frontend: Running on port 5173 with React dev server
-- New .env file available but not activated yet
+## Notes
+- The application integrates with Jira for ticket retrieval and analysis
+- Uses AI to prioritize tickets based on contextual importance
+- Has both CLI and web interfaces
+- Latest work focused on enhancing the web UI for AI ticket analysis
+- Design requirements specified a clear visual hierarchy for priority tickets
