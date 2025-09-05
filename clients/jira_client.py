@@ -131,6 +131,22 @@ class JiraClient:
     def get_ticket_url(self, ticket_key: str) -> str:
         """Generate a URL to view a ticket in the Jira web interface"""
         return f"{self.base_url}/browse/{ticket_key}"
+
+    def get_ticket(self, ticket_key: str) -> Optional[Ticket]:
+        """Get a specific ticket by key"""
+        url = f"{self.base_url}/rest/api/3/issue/{ticket_key}"
+        params = {
+            'fields': 'key,summary,description,priority,status,assignee,created,updated,comment,labels,issuetype'
+        }
+        
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            response.raise_for_status()
+            issue = response.json()
+            return self._convert_to_ticket(issue)
+        except requests.RequestException as e:
+            print(f"Error fetching ticket {ticket_key}: {e}")
+            return None
         
     def add_comment(self, ticket_key: str, comment: str) -> bool:
         """Add a comment to a Jira ticket"""

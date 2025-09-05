@@ -49,6 +49,14 @@ async def get_ticket_url(ticket_key: str):
     return assistant.get_ticket_url(ticket_key)
 
 
+@app.post("/api/ticket/{ticket_key}/analyze")
+async def analyze_ticket(ticket_key: str):
+    """Get AI analysis specific to a single ticket."""
+    if assistant is None:
+        raise HTTPException(status_code=503, detail="Assistant unavailable")
+    return assistant.analyze_single_ticket(ticket_key)
+
+
 # Serve the frontend if it has been built
 frontend_dist = Path(__file__).parent / "frontend" / "dist"
 if frontend_dist.exists():

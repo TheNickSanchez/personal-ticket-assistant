@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play, ExternalLink, Sparkles, RefreshCw, MessageCircle, Code } from 'lucide-react';
+import { ChevronRight, AlertTriangle, Clock, User, Calendar, Search, Target, Brain, ArrowRight, CheckCircle, Play, ExternalLink, Sparkles, RefreshCw, Code } from 'lucide-react';
 
 const PersonalTicketAssistant = () => {
-  const [currentView, setCurrentView] = useState('tickets'); // tickets, analysis, work
+  const [currentView, setCurrentView] = useState('tickets'); // tickets, analysis
   const [selectedTicket, setSelectedTicket] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const searchInputRef = useRef(null);
@@ -16,8 +16,7 @@ const PersonalTicketAssistant = () => {
   const [loading, setLoading] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState(null);
   const [analysisLoading, setAnalysisLoading] = useState(false);
-  const [workMode, setWorkMode] = useState('brainstorm'); // 'brainstorm' or 'script'
-  const [scriptContent, setScriptContent] = useState('');
+  // Removed work mode state variables - no longer needed
   const [chatMessages, setChatMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   
@@ -175,6 +174,63 @@ const PersonalTicketAssistant = () => {
     }
   };
   
+  // Fetch analysis for a specific ticket
+  const fetchTicketAnalysis = async (ticketKey) => {
+    setAnalysisLoading(true);
+    try {
+      console.log(`Fetching analysis for ticket: ${ticketKey}`);
+      const response = await fetch(`http://localhost:8001/api/ticket/${ticketKey}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        console.log(`Analysis received for ${ticketKey}:`, data);
+        
+        // Update the analysis state with ticket-specific data
+        setAiAnalysis({
+          topPriority: ticketKey,
+          reasoning: data.analysis.priority_reasoning || '',
+          urgency: data.analysis.summary || '',
+          nextSteps: data.analysis.next_steps || [],
+          howICanHelp: data.analysis.can_help_with || [],
+          context: data.analysis.context || '',
+          ticketSpecific: true, // Flag to indicate this is ticket-specific
+          analyzedTicket: data.ticket || null
+        });
+      } else {
+        console.error(`Failed to fetch analysis for ${ticketKey}:`, response.status);
+        // Fallback to basic ticket info
+        const ticket = tickets.find(t => t.key === ticketKey);
+        if (ticket) {
+          setAiAnalysis({
+            topPriority: ticketKey,
+            reasoning: `Analysis for ${ticketKey}: ${ticket.summary}`,
+            urgency: `Priority ${ticket.priority} ticket, ${ticket.age} old, ${ticket.stale} since last update.`,
+            nextSteps: [
+              'Review ticket details and requirements',
+              'Identify blockers or dependencies',
+              'Plan next actions based on status'
+            ],
+            howICanHelp: [
+              'Research related documentation',
+              'Help break down tasks into steps',
+              'Assist with planning'
+            ],
+            context: `This ticket is part of your current workload and has been ${ticket.status} for ${ticket.stale}.`,
+            ticketSpecific: true,
+            analyzedTicket: ticket
+          });
+        }
+      }
+    } catch (error) {
+      console.error(`Error fetching analysis for ${ticketKey}:`, error);
+    } finally {
+      setAnalysisLoading(false);
+    }
+  };
+  
   // Open ticket in Jira
   const openTicketInJira = async (ticketKey, e) => {
     e.stopPropagation(); // Prevent triggering the parent onClick
@@ -199,8 +255,7 @@ const PersonalTicketAssistant = () => {
       type: 'assistant',
       content: `I can help you with: "${helpText}". What specific aspect would you like to explore?`
     }]);
-    setCurrentView('work');
-    setWorkMode('brainstorm');
+    // Show chat interface without navigating away from analysis view
   };
 
   // Handle sending chat messages
@@ -225,6 +280,208 @@ const PersonalTicketAssistant = () => {
       };
       setChatMessages(prev => [...prev, aiResponse]);
     }, 1000);
+  };
+
+  // Contextual Action Engine - analyzes ticket metadata to suggest specific actions
+  const getContextualRecommendation = (ticket, analysis, demoMode) => {
+    if (!ticket || !analysis) {
+      return (
+        <div className="text-center py-8">
+          <p className="text-slate-400">Loading contextual recommendations...</p>
+        </div>
+      );
+    }
+
+    // Rule-based contextual logic
+    const getContextualAction = (ticket) => {
+      const age = parseInt(ticket.age?.replace('d', '') || '0');
+      const stale = parseInt(ticket.stale?.replace('d', '') || '0');
+      const priority = ticket.priority?.toLowerCase() || '';
+      const summary = ticket.summary?.toLowerCase() || '';
+      const status = ticket.status?.toLowerCase() || '';
+      
+      // Integration failure + very old = verify if issue still exists
+      if (summary.includes('integration') && summary.includes('fail') && age > 180) {
+        return {
+          title: "Verify Issue Still Exists",
+          reasoning: `This ${age}-day-old integration issue may have been automatically resolved. Let's verify the current state before investing effort.`,
+          primary: {
+            text: "Test Current Integration Status",
+            description: "Check if the ServiceNow-Jamf auto-lock is still failing",
+            action: "Test the current ServiceNow-Jamf integration to see if auto-lock failures are still occurring"
+          },
+          secondary: {
+            text: "Research Recent Changes", 
+            description: "Look for system updates that may have resolved this",
+            action: "Check ServiceNow and Jamf system logs for recent changes that might have fixed the integration"
+          }
+        };
+      }
+      
+      // P1/Critical + old = escalate or close decision
+      if (priority.includes('p1') && age > 90) {
+        return {
+          title: "Escalate or Close Decision Needed",
+          reasoning: `This P1 ticket is ${age} days old. Either it needs immediate escalation or the priority should be re-evaluated.`,
+          primary: {
+            text: "Escalate for Immediate Action",
+            description: "Get stakeholder attention for this aging P1",
+            action: "Escalate this P1 ticket to management due to its age and lack of progress"
+          },
+          secondary: {
+            text: "Re-assess Priority Level",
+            description: "Check if this is truly still P1 priority",
+            action: "Review with stakeholders whether this ticket is still P1 priority given its age"
+          }
+        };
+      }
+      
+      // In Progress + very stale = check status with assignee
+      if (status.includes('progress') && stale > 30) {
+        return {
+          title: "Check Progress Status",
+          reasoning: `This ticket has been "In Progress" but stale for ${stale} days. Let's get a status update.`,
+          primary: {
+            text: "Get Status from Assignee",
+            description: "Find out what's blocking progress",
+            action: `Contact ${ticket.assignee || 'the assignee'} to get current status and identify blockers`
+          },
+          secondary: {
+            text: "Review Recent Activity", 
+            description: "Check for updates in comments or related tickets",
+            action: "Review recent comments and related tickets for context on current progress"
+          }
+        };
+      }
+      
+      // Security/vulnerability + any age = check for patch
+      if (summary.includes('vulnerabilit') || summary.includes('security')) {
+        return {
+          title: "Security Issue - Check for Patch",
+          reasoning: "Security vulnerabilities should be addressed quickly. Let's check if a patch or fix is available.",
+          primary: {
+            text: "Check for Available Patch",
+            description: "Look for security updates or fixes",
+            action: "Research if a security patch or update is available for this vulnerability"
+          },
+          secondary: {
+            text: "Assess Impact & Urgency",
+            description: "Determine blast radius and criticality",
+            action: "Assess the security impact and determine if this needs emergency patching"
+          }
+        };
+      }
+      
+      // VOC_Feedback (customer complaint) = reproduce issue
+      if (ticket.labels?.includes('VOC_Feedback') || summary.includes('customer') || summary.includes('user')) {
+        return {
+          title: "Customer Impact - Reproduce Issue",
+          reasoning: "This appears to impact users directly. Let's reproduce the issue to understand the customer experience.",
+          primary: {
+            text: "Reproduce Customer Issue",
+            description: "Experience the problem from user perspective",
+            action: "Attempt to reproduce the customer-reported issue to understand the impact"
+          },
+          secondary: {
+            text: "Contact Affected Users",
+            description: "Get more details from customers",
+            action: "Reach out to affected customers for additional context and impact assessment"
+          }
+        };
+      }
+      
+      // Fresh ticket (< 7 days) = gather context
+      if (age < 7) {
+        return {
+          title: "Fresh Ticket - Gather Context",
+          reasoning: `This ${age}-day-old ticket needs initial investigation to understand requirements and scope.`,
+          primary: {
+            text: "Investigate Requirements",
+            description: "Understand what needs to be done",
+            action: "Review ticket details, requirements, and gather context from stakeholders"
+          },
+          secondary: {
+            text: "Check for Dependencies",
+            description: "Look for related tickets or blockers",
+            action: "Search for related tickets and identify any dependencies or blockers"
+          }
+        };
+      }
+      
+      // Fallback for any ticket
+      return {
+        title: "Analyze Current Status",
+        reasoning: `Let's get up to speed on this ${priority} ticket and identify the best path forward.`,
+        primary: {
+          text: "Review Current Status",
+          description: "Understand where things stand",
+          action: `Review ${ticket.key} status, recent activity, and identify next steps`
+        },
+        secondary: {
+          text: "Identify Blockers",
+          description: "Find what's preventing progress", 
+          action: "Identify any blockers, dependencies, or issues preventing progress"
+        }
+      };
+    };
+
+    // Use demo-specific logic for CPE-3117 or contextual logic for live tickets
+    let recommendation;
+    if (demoMode && ticket.key === 'CPE-3117') {
+      recommendation = {
+        title: "Integration Issue - Verify Current State",
+        reasoning: "This 210-day-old ServiceNow-Jamf integration ticket needs verification before proceeding with fixes.",
+        primary: {
+          text: "Test Current Auto-Lock Status",
+          description: "Check if the integration is still failing",
+          action: "Test the ServiceNow-Jamf integration to verify if auto-lock failures are still occurring"
+        },
+        secondary: {
+          text: "Check CPE-3043 Dependency",
+          description: "Verify if the root cause ticket was resolved",
+          action: "Check status of CPE-3043 dependency ticket to see if it was resolved"
+        }
+      };
+    } else {
+      recommendation = getContextualAction(ticket);
+    }
+
+    return (
+      <div className="space-y-6">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-slate-100 mb-2">🎯 {recommendation.title}</h2>
+          <p className="text-slate-400 max-w-2xl mx-auto">{recommendation.reasoning}</p>
+        </div>
+        
+        <div className="grid gap-4 max-w-2xl mx-auto">
+          <button
+            onClick={() => handleHelpAction(recommendation.primary.action)}
+            className="w-full p-6 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 border-2 border-blue-500/50 rounded-xl text-left transition-all group"
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-xl font-semibold text-white mb-2">{recommendation.primary.text}</h3>
+                <p className="text-blue-100 text-sm">{recommendation.primary.description}</p>
+              </div>
+              <ArrowRight className="w-6 h-6 text-blue-200 group-hover:text-white group-hover:translate-x-1 transition-all" />
+            </div>
+          </button>
+          
+          <button
+            onClick={() => handleHelpAction(recommendation.secondary.action)}
+            className="w-full p-6 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 border-2 border-purple-500/50 rounded-xl text-left transition-all group"
+          >
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-xl font-semibold text-white mb-2">{recommendation.secondary.text}</h3>
+                <p className="text-purple-100 text-sm">{recommendation.secondary.description}</p>
+              </div>
+              <ArrowRight className="w-6 h-6 text-purple-200 group-hover:text-white group-hover:translate-x-1 transition-all" />
+            </div>
+          </button>
+        </div>
+      </div>
+    );
   };
 
   // Generate sample script
@@ -369,14 +626,21 @@ echo "Script completed. Please review the output above."`;
           )}
           <button 
             onClick={() => {
-              console.log('AI Priority Analysis button clicked');
+              console.log('Workload Overview button clicked');
               console.log('isDemoMode:', isDemoMode);
               console.log('tickets.length:', tickets.length);
               console.log('aiAnalysis exists:', !!aiAnalysis);
               console.log('currentView before:', currentView);
               
+              // Clear selected ticket for workload analysis
+              setSelectedTicket('');
+              
               if (isDemoMode || (tickets.length > 0 && aiAnalysis)) {
                 console.log('Setting currentView to analysis immediately');
+                // Clear ticket-specific flag for workload analysis
+                if (aiAnalysis?.ticketSpecific) {
+                  setAiAnalysis({...aiAnalysis, ticketSpecific: false});
+                }
                 setCurrentView('analysis');
               } else if (!isDemoMode) {
                 console.log('Fetching real data first, then setting analysis view');
@@ -390,7 +654,7 @@ echo "Script completed. Please review the output above."`;
             disabled={loading || analysisLoading}
           >
             <Brain className="w-4 h-4" />
-            AI Priority Analysis
+            Workload Overview
             {(loading || analysisLoading) && (
               <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin ml-1"></div>
             )}
@@ -451,6 +715,8 @@ echo "Script completed. Please review the output above."`;
                 onClick={() => {
                   setSelectedTicket(ticket.key);
                   setCurrentView('analysis');
+                  // Fetch analysis specific to this ticket
+                  fetchTicketAnalysis(ticket.key);
                 }}
               >
               <div className="col-span-2 font-mono text-slate-300 flex items-center">
@@ -476,7 +742,7 @@ echo "Script completed. Please review the output above."`;
 
       <div className="text-center">
         <p className="text-slate-500 text-sm">
-          Click on any ticket or use <strong>AI Priority Analysis</strong> to get focused guidance
+          <strong>Click any ticket</strong> for specific analysis, or use <strong>Workload Overview</strong> for overall prioritization
         </p>
       </div>
     </div>
@@ -540,8 +806,40 @@ echo "Script completed. Please review the output above."`;
         </div>
 
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-slate-100 mb-2">AI Work Analysis</h1>
-          <p className="text-slate-400">Based on customer impact, urgency, and your expertise</p>
+          <h1 className="text-2xl font-bold text-slate-100 mb-2">
+            {aiAnalysis?.ticketSpecific ? 'Ticket Analysis' : 'AI Work Analysis'}
+          </h1>
+          <p className="text-slate-400">
+            {aiAnalysis?.ticketSpecific 
+              ? `Focused analysis for ${selectedTicket || 'selected ticket'}` 
+              : 'Based on customer impact, urgency, and your expertise'
+            }
+          </p>
+          
+          {/* Analysis type indicator */}
+          <div className="mt-3 inline-flex items-center gap-2 px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+            <Brain className="w-4 h-4 text-blue-400" />
+            <span className="text-blue-200 text-sm">
+              {aiAnalysis?.ticketSpecific 
+                ? `📊 Analyzing ticket: ${selectedTicket || aiAnalysis?.topPriority}` 
+                : '📊 Overall Workload Analysis'
+              }
+            </span>
+            <button
+              onClick={() => {
+                if (aiAnalysis?.ticketSpecific && selectedTicket) {
+                  fetchTicketAnalysis(selectedTicket);
+                } else if (!aiAnalysis?.ticketSpecific) {
+                  fetchRealData();
+                }
+              }}
+              className="ml-2 text-blue-400 hover:text-blue-300 transition-colors"
+              title="Re-analyze"
+              disabled={analysisLoading}
+            >
+              <RefreshCw className={`w-4 h-4 ${analysisLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
         </div>
 
         <div className="bg-gradient-to-r from-purple-500/10 to-cyan-500/10 border-2 border-purple-500/30 rounded-xl p-8">
@@ -584,7 +882,7 @@ echo "Script completed. Please review the output above."`;
             
             <h3 className="font-semibold text-slate-200 mb-3">Next concrete steps:</h3>
             <ol className="list-decimal list-inside space-y-2 text-slate-300 mb-4">
-              {aiAnalysis.nextSteps.map((step, i) => (
+              {(aiAnalysis?.nextSteps || []).map((step, i) => (
                 <li key={i} className="prose prose-invert prose-sm max-w-none">
                   <ReactMarkdown 
                     components={{
@@ -596,16 +894,24 @@ echo "Script completed. Please review the output above."`;
                 </li>
               ))}
             </ol>
+            
+            {/* Show context for ticket-specific analysis */}
+            {aiAnalysis?.ticketSpecific && aiAnalysis?.context && (
+              <>
+                <h3 className="font-semibold text-slate-200 mb-3 mt-6">Context & Dependencies:</h3>
+                <div className="text-slate-300 prose prose-invert prose-sm max-w-none">
+                  <ReactMarkdown>{aiAnalysis.context}</ReactMarkdown>
+                </div>
+              </>
+            )}
           </div>
 
-          <div className="flex gap-4 mt-6">
-            <button 
-              onClick={() => setCurrentView('work')}
-              className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-purple-800 transition-all flex items-center justify-center gap-2"
-            >
-              <Sparkles className="w-4 h-4" />
-              Let's work on this
-            </button>
+          {/* Contextual Action Recommendations */}
+          <div className="mt-6">
+            {getContextualRecommendation(focusTicket, aiAnalysis, isDemoMode)}
+          </div>
+          
+          <div className="flex justify-center mt-6">
             <button 
               onClick={() => {
                 setSelectedTicket('');
@@ -622,26 +928,54 @@ echo "Script completed. Please review the output above."`;
           </div>
         </div>
 
-        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-          <h3 className="font-semibold text-slate-200 mb-4">How I can help</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {aiAnalysis.howICanHelp.map((help, i) => (
-              <button 
-                key={i}
-                onClick={() => handleHelpAction(help)}
-                className="flex items-center gap-3 p-3 bg-slate-700/30 hover:bg-slate-600/40 rounded-lg transition-colors cursor-pointer text-left group"
+        {/* Show chat interface if user has clicked a contextual action */}
+        {chatMessages.length > 0 && (
+          <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
+            <h3 className="font-semibold text-slate-200 mb-4">AI Assistant Chat</h3>
+            
+            <div className="h-64 border border-slate-700/50 rounded-lg bg-slate-900/30 p-4 mb-4 overflow-y-auto">
+              <div className="space-y-4">
+                {chatMessages.map((msg, i) => (
+                  <div key={i} className={`flex gap-3 ${
+                    msg.type === 'user' ? 'justify-end' : 'justify-start'
+                  }`}>
+                    <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                      msg.type === 'user'
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-slate-700 text-slate-200'
+                    }`}>
+                      {msg.content}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            <div className="flex gap-2">
+              <input
+                id="chat-input"
+                name="chatInput"
+                type="text"
+                value={inputMessage}
+                onChange={(e) => setInputMessage(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+                placeholder="Ask me about this ticket..."
+                className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-slate-300 placeholder-slate-500"
+              />
+              <button
+                onClick={handleSendMessage}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
               >
-                <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0 group-hover:text-green-300" />
-                <span className="text-slate-300 group-hover:text-slate-200">{help}</span>
+                Send
               </button>
-            ))}
+            </div>
           </div>
-        </div>
+        )}
 
         <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
           <h3 className="font-semibold text-slate-200 mb-4">Other notable tickets</h3>
           <div className="space-y-3">
-            {aiAnalysis.otherNotable.map(item => (
+            {(aiAnalysis?.otherNotable || []).map(item => (
               <div key={item.key} className="border-l-4 border-slate-600 pl-4">
                 <div className="font-semibold text-slate-300 mb-1">{item.key}</div>
                 <div className="text-slate-400 text-sm">{item.note}</div>
@@ -653,214 +987,7 @@ echo "Script completed. Please review the output above."`;
     );
   };
 
-  const WorkView = () => {
-    const topPriorityKey = typeof aiAnalysis?.topPriority === 'string'
-      ? aiAnalysis.topPriority
-      : aiAnalysis?.topPriority?.key;
-    const focusTicket = currentTickets.find(t => t.key === (selectedTicket || topPriorityKey));
-
-    if (!aiAnalysis || analysisLoading) {
-      return <div>Loading work analysis...</div>;
-    }
-
-    const workSteps = aiAnalysis.nextSteps || [];
-
-    return (
-      <div className="max-w-6xl mx-auto space-y-6">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => setCurrentView('analysis')}
-              className="flex items-center gap-2 text-slate-400 hover:text-slate-300"
-            >
-              <ChevronRight className="w-4 h-4 rotate-180" />
-              Back to analysis
-            </button>
-            <div className="h-6 w-px bg-slate-700"></div>
-            <div>
-              <h1 className="text-xl font-bold text-slate-100">Working on {focusTicket?.key}</h1>
-              <p className="text-slate-400 text-sm">{focusTicket?.summary}</p>
-            </div>
-          </div>
-          <div className="flex gap-3">
-            <div className="flex bg-slate-800/50 border border-slate-700/50 rounded-lg p-1">
-              <button
-                onClick={() => setWorkMode('brainstorm')}
-                className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                  workMode === 'brainstorm'
-                    ? 'bg-purple-600 text-white'
-                    : 'text-slate-400 hover:text-slate-300'
-                }`}
-              >
-                <MessageCircle className="w-4 h-4 inline mr-1" />
-                Brainstorm
-              </button>
-              <button
-                onClick={() => setWorkMode('script')}
-                className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
-                  workMode === 'script'
-                    ? 'bg-purple-600 text-white'
-                    : 'text-slate-400 hover:text-slate-300'
-                }`}
-              >
-                <Code className="w-4 h-4 inline mr-1" />
-                Script
-              </button>
-            </div>
-            <button
-              onClick={(e) => openTicketInJira(focusTicket?.key, e)}
-              className="flex items-center gap-2 px-4 py-2 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded-lg text-slate-200 transition-colors"
-              title="Open in Jira"
-            >
-              <ExternalLink className="w-4 h-4" />
-              Open in Jira
-            </button>
-          </div>
-        </div>
-
-        {workMode === 'brainstorm' ? (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 space-y-6">
-              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-semibold text-slate-200">AI Assistant Chat</h3>
-                  <button
-                    onClick={generateScript}
-                    className="px-3 py-1 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded text-sm font-medium hover:from-purple-700 hover:to-purple-800 transition-all"
-                  >
-                    Generate Script
-                  </button>
-                </div>
-                
-                <div className="h-96 border border-slate-700/50 rounded-lg bg-slate-900/30 p-4 mb-4 overflow-y-auto">
-                  {chatMessages.length === 0 ? (
-                    <div className="text-slate-500 text-center py-8">
-                      <MessageCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                      <p>Start a conversation about this ticket. Ask me anything!</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {chatMessages.map((msg, i) => (
-                        <div key={i} className={`flex gap-3 ${
-                          msg.type === 'user' ? 'justify-end' : 'justify-start'
-                        }`}>
-                          <div className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
-                            msg.type === 'user'
-                              ? 'bg-purple-600 text-white'
-                              : 'bg-slate-700 text-slate-200'
-                          }`}>
-                            {msg.content}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                
-                <div className="flex gap-2">
-                  <input
-                    id="chat-input"
-                    name="chatInput"
-                    type="text"
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                    placeholder="Ask me about this ticket..."
-                    className="flex-1 px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-slate-300 placeholder-slate-500"
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
-                  >
-                    Send
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-6">
-              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-                <h3 className="font-semibold text-slate-200 mb-4">Next concrete steps</h3>
-                <ol className="list-decimal list-inside space-y-2 text-slate-300 text-sm">
-                  {workSteps.map((step, i) => (
-                    <li key={i}>{step}</li>
-                  ))}
-                </ol>
-              </div>
-              
-              <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-                <h3 className="font-semibold text-slate-200 mb-4">Quick Actions</h3>
-                <div className="space-y-2">
-                  <button
-                    onClick={() => handleHelpAction("Research the cause of the snow integration failure")}
-                    className="w-full text-left px-3 py-2 bg-slate-700/30 hover:bg-slate-600/40 rounded text-sm text-slate-300 transition-colors"
-                  >
-                    🔍 Research integration failure
-                  </button>
-                  <button
-                    onClick={() => handleHelpAction("Review the Jamf script logs")}
-                    className="w-full text-left px-3 py-2 bg-slate-700/30 hover:bg-slate-600/40 rounded text-sm text-slate-300 transition-colors"
-                  >
-                    📋 Review script logs
-                  </button>
-                  <button
-                    onClick={() => handleHelpAction("Develop a solution plan")}
-                    className="w-full text-left px-3 py-2 bg-slate-700/30 hover:bg-slate-600/40 rounded text-sm text-slate-300 transition-colors"
-                  >
-                    💡 Develop solution plan
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-slate-200">Generated Script</h3>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => navigator.clipboard.writeText(scriptContent)}
-                    className="px-3 py-1 bg-slate-700/50 hover:bg-slate-600/50 border border-slate-600/30 rounded text-sm text-slate-200 transition-colors"
-                  >
-                    Copy Script
-                  </button>
-                  <button
-                    onClick={generateScript}
-                    className="px-3 py-1 bg-gradient-to-r from-purple-600 to-purple-700 text-white rounded text-sm font-medium hover:from-purple-700 hover:to-purple-800 transition-all"
-                  >
-                    Regenerate
-                  </button>
-                </div>
-              </div>
-              
-              {scriptContent ? (
-                <div className="bg-slate-900/50 border border-slate-700/50 rounded-lg p-4">
-                  <pre className="text-green-400 text-sm font-mono whitespace-pre-wrap overflow-x-auto">
-                    {scriptContent}
-                  </pre>
-                </div>
-              ) : (
-                <div className="text-slate-500 text-center py-8">
-                  <Code className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p>Click "Generate Script" to create a custom script for this ticket</p>
-                </div>
-              )}
-            </div>
-            
-            {scriptContent && (
-              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4">
-                <p className="text-amber-200">
-                  <strong>⚠️ Review before use:</strong> This script is generated based on the ticket context. 
-                  Please review and test it in a safe environment before running on production systems.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-    );
-  };
+  // Removed WorkView - contextual recommendations now appear directly in AnalysisView
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
@@ -901,7 +1028,6 @@ echo "Script completed. Please review the output above."`;
       <main className="p-6">
         {currentView === 'tickets' && <TicketsView />}
         {currentView === 'analysis' && <AnalysisView />}
-        {currentView === 'work' && <WorkView />}
       </main>
     </div>
   );

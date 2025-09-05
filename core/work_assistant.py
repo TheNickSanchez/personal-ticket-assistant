@@ -1043,3 +1043,33 @@ The assistant understands natural language, so you can also:
     def get_ticket_url(self, ticket_key: str) -> Dict[str, str]:
         """Get the URL to view a ticket in the Jira web interface."""
         return {"url": self.jira.get_ticket_url(ticket_key)}
+
+    def analyze_single_ticket(self, ticket_key: str) -> Dict[str, Any]:
+        """Get AI analysis specific to a single ticket."""
+        # Find the ticket in current tickets
+        target_ticket = None
+        for ticket in self.current_tickets:
+            if ticket.key == ticket_key:
+                target_ticket = ticket
+                break
+        
+        if not target_ticket:
+            # If not in current tickets, fetch it directly from Jira
+            target_ticket = self.jira.get_ticket(ticket_key)
+            if not target_ticket:
+                raise ValueError(f"Ticket {ticket_key} not found")
+        
+        # Get ticket-specific analysis from LLM
+        analysis = self.llm.analyze_single_ticket(target_ticket, self.current_tickets)
+        
+        return {
+            "ticket_key": ticket_key,
+            "analysis": {
+                "priority_reasoning": analysis.priority_reasoning,
+                "next_steps": analysis.next_steps,
+                "can_help_with": analysis.can_help_with,
+                "summary": analysis.summary,
+                "context": analysis.context if hasattr(analysis, 'context') else None,
+            },
+            "ticket": asdict(target_ticket)
+        }

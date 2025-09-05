@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Personal Ticket Assistant - Setup Guide</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #4f46e5;
+            border-bottom: 2px solid #e5e7eb;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #4338ca;
+            margin-top: 30px;
+        }
+        .card {
+            background-color: #f9fafb;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            border-left: 4px solid #4f46e5;
+        }
+        code {
+            background-color: #f1f1f1;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        }
+        pre {
+            background-color: #f1f1f1;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }
+        .button {
+            display: inline-block;
+            background-color: #4f46e5;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-weight: bold;
+        }
+        .button:hover {
+            background-color: #4338ca;
+        }
+        .warning {
+            background-color: #fef2f2;
+            border-left: 4px solid #ef4444;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Personal Ticket Assistant - Setup Guide</h1>
+    
+    <div class="card">
+        <p>The application is currently running in <strong>Demo Mode</strong> with mock data. To use the application with your real Jira tickets, you need to configure your credentials.</p>
+    </div>
+
+    <div class="warning">
+        <h3>⚠️ Configuration Required</h3>
+        <p>Your application is running but needs Jira credentials to fully function.</p>
+    </div>
+
+    <h2>Step 1: Get Your Jira API Token</h2>
+    <ol>
+        <li>Go to <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank">https://id.atlassian.com/manage-profile/security/api-tokens</a></li>
+        <li>Click "Create API token"</li>
+        <li>Name it "Personal Ticket Assistant" and click "Create"</li>
+        <li>Copy the generated token</li>
+    </ol>
+
+    <h2>Step 2: Update Your .env File</h2>
+    <p>Edit the <code>.env</code> file in the root of your project and replace:</p>
+    <pre>JIRA_API_TOKEN=your_jira_api_token_here</pre>
+    <p>With your actual token:</p>
+    <pre>JIRA_API_TOKEN=your-actual-token-here</pre>
+
+    <h2>Step 3: Restart the Application</h2>
+    <p>After updating your <code>.env</code> file, stop the current process and restart the application:</p>
+    <pre>./start_web.sh</pre>
+
+    <h2>What's New</h2>
+    <p>We've added the "Open in Jira" feature! You can now:</p>
+    <ul>
+        <li>Click on ticket IDs in the list view to open them directly in Jira</li>
+        <li>Use the "Open in Jira" button in the analysis view to view full ticket details</li>
+        <li>Access ticket details directly from the work view</li>
+    </ul>
+
+    <h2>Next Steps</h2>
+    <p>Once your credentials are configured, you can:</p>
+    <ul>
+        <li>View your actual Jira tickets</li>
+        <li>Get AI-powered analysis of your workload</li>
+        <li>Receive prioritization recommendations</li>
+        <li>Access tickets directly in Jira with one click</li>
+    </ul>
+
+    <div style="margin-top: 40px; text-align: center;">
+        <a href="http://localhost:5176" class="button">Go to Application</a>
+    </div>
+</body>
+</html>

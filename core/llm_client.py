@@ -5,6 +5,7 @@ import requests
 import hashlib
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from dataclasses import asdict
 
 import openai
 
@@ -88,6 +89,162 @@ class LLMClient:
             if deps:
                 dependencies[ticket.key] = deps
         return dependencies
+
+    def analyze_single_ticket(self, ticket: Ticket, context_tickets: List[Ticket]) -> WorkloadAnalysis:
+        """Get AI analysis specific to a single ticket with context from other tickets."""
+        
+        # Create a cache key for this specific ticket analysis
+        cache_key = f"single_ticket_{ticket.key}_{ticket.updated.isoformat()}"
+        
+        # Check if we have cached analysis for this ticket
+        if hasattr(self.analysis_cache, 'get'):
+            try:
+                cached = self.analysis_cache.get(cache_key)
+                if cached:
+                    return WorkloadAnalysis(**cached)
+            except Exception:
+                pass
+        
+        # Prepare ticket data for focused analysis
+        ticket_data = {
+            'key': ticket.key,
+            'summary': ticket.summary,
+            'priority': ticket.priority,
+            'status': ticket.status,
+            'age_days': ticket.age_days,
+            'stale_days': ticket.stale_days,
+            'comments_count': ticket.comments_count,
+            'labels': ticket.labels,
+            'issue_type': ticket.issue_type,
+            'description': ticket.description or "No description",
+            'assignee': ticket.assignee
+        }
+        
+        # Include context from related tickets (for dependencies, similar tickets, etc.)
+        context_data = []
+        for ctx_ticket in context_tickets[:10]:  # Limit context to avoid token limits
+            if ctx_ticket.key != ticket.key:
+                context_data.append({
+                    'key': ctx_ticket.key,
+                    'summary': ctx_ticket.summary,
+                    'priority': ctx_ticket.priority,
+                    'status': ctx_ticket.status,
+                    'labels': ctx_ticket.labels,
+                })
+        
+        prompt = f"""
+You are an expert AI assistant analyzing a specific Jira ticket to provide focused insights and recommendations.
+
+**TARGET TICKET:**
+Key: {ticket_data['key']}
+Summary: {ticket_data['summary']}
+Priority: {ticket_data['priority']}
+Status: {ticket_data['status']}
+Type: {ticket_data['issue_type']}
+Age: {ticket_data['age_days']} days old
+Stale: {ticket_data['stale_days']} days since last update
+Comments: {ticket_data['comments_count']}
+Labels: {', '.join(ticket_data['labels']) if ticket_data['labels'] else 'None'}
+Assignee: {ticket_data['assignee'] or 'Unassigned'}
+
+Description:
+{ticket_data['description']}
+
+**CONTEXT (Related tickets in workload):**
+{json.dumps(context_data, indent=2)}
+
+**ANALYSIS REQUEST:**
+Provide a focused analysis of ticket {ticket_data['key']} specifically. Consider:
+
+1. **Priority Assessment**: Why should this ticket be prioritized (or not)?
+2. **Next Concrete Steps**: What specific actions should be taken to move this ticket forward?
+3. **Ways to Help**: How can an AI assistant specifically help with this ticket?
+4. **Context & Dependencies**: How does this ticket relate to others in the workload?
+5. **Risk & Impact**: What happens if this ticket is delayed further?
+
+**RESPONSE FORMAT:**
+Provide your analysis in this JSON structure:
+{{
+    "priority_reasoning": "Detailed explanation of priority level and why",
+    "next_steps": ["Step 1", "Step 2", "Step 3"],
+    "can_help_with": ["Specific way 1", "Specific way 2", "Specific way 3"],
+    "summary": "2-3 sentence executive summary of the ticket analysis",
+    "context": "How this ticket relates to others in the workload",
+    "contextual_summary": "A narrative summary for 'where we left off' - include timeline, stakeholders, specific issues, and smart recommendations. Be conversational and specific about what happened and what should happen next.",
+    "suggested_actions": ["Contextual action 1 based on ticket state", "Contextual action 2 based on dependencies", "Contextual action 3 based on blockers"]
+}}
+
+Focus specifically on {ticket_data['key']} - do not provide general workload analysis.
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+            )
+            
+            content = response.choices[0].message.content.strip()
+            
+            # Extract JSON from response
+            if content.startswith('```json'):
+                content = content[7:]
+            if content.endswith('```'):
+                content = content[:-3]
+            content = content.strip()
+            
+            analysis_data = json.loads(content)
+            
+            # Create WorkloadAnalysis object (reusing structure but for single ticket)
+            analysis = WorkloadAnalysis(
+                top_priority=ticket,  # The ticket itself is the "top priority" for single analysis
+                priority_reasoning=analysis_data.get('priority_reasoning', ''),
+                next_steps=analysis_data.get('next_steps', []),
+                can_help_with=analysis_data.get('can_help_with', []),
+                other_notable=[],  # Empty for single ticket analysis
+                summary=analysis_data.get('summary', ''),
+            )
+            
+            # Add context and new fields as additional attributes
+            analysis.context = analysis_data.get('context', '')
+            analysis.contextual_summary = analysis_data.get('contextual_summary', '')
+            analysis.suggested_actions = analysis_data.get('suggested_actions', [])
+            
+            # Cache the analysis
+            if hasattr(self.analysis_cache, 'set'):
+                try:
+                    self.analysis_cache.set(cache_key, {
+                        'top_priority': asdict(ticket),
+                        'priority_reasoning': analysis.priority_reasoning,
+                        'next_steps': analysis.next_steps,
+                        'can_help_with': analysis.can_help_with,
+                        'other_notable': [],
+                        'summary': analysis.summary,
+                        'context': analysis.context
+                    })
+                except Exception:
+                    pass
+            
+            return analysis
+            
+        except Exception as e:
+            # Fallback analysis if LLM fails
+            return WorkloadAnalysis(
+                top_priority=ticket,
+                priority_reasoning=f"Analysis for {ticket.key} - {ticket.summary}. Priority: {ticket.priority}. Age: {ticket.age_days} days.",
+                next_steps=[
+                    f"Review ticket {ticket.key} details and requirements",
+                    "Identify specific blockers or dependencies", 
+                    "Plan next actions based on ticket status and priority"
+                ],
+                can_help_with=[
+                    "Research related documentation",
+                    "Help break down the task into smaller steps",
+                    "Assist with planning and prioritization"
+                ],
+                other_notable=[],
+                summary=f"Individual analysis of {ticket.key}: {ticket.summary[:100]}{'...' if len(ticket.summary) > 100 else ''}"
+            )
 
     def _compute_analysis(self, tickets: List[Ticket], patterns: Optional[Dict[str, Dict[str, int]]] = None) -> WorkloadAnalysis:
         """Get AI analysis of your ticket workload"""
