@@ -15,6 +15,7 @@ applyTo: '**'
 - Project name: personal-ticket-assistant
 - Purpose: An AI-powered assistant that helps with Jira ticket prioritization, analysis, and management
 - Architecture: Modular design with core components, clients, integrations, and utils
+- Current task: Implementing AI Workload Analysis Overhaul with improved ticket prioritization interface
 
 ## Coding Patterns
 - Dataclasses for data models
@@ -32,3 +33,5 @@ applyTo: '**'
 - Has both CLI and web interfaces
 - Currently undergoing refactoring per REFACTORING_PLAN.md
 - Enhancement roadmap available in ENHANCEMENT_ROADMAP.md
+- Updated button name: "AI Workload Analysis" (previously "Workload Overview")
+- New priority logic implementation required for ticket analysis
